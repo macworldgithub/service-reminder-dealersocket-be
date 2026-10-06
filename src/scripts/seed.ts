@@ -32,21 +32,10 @@ async function seed() {
     });
   }
 
-  let kia = await Dealership.findOne({ code: 'MK-02' });
-  if (!kia) {
-    kia = await Dealership.create({
-      name: 'Melbourne Kia',
-      code: 'MK-02',
-      timezone: 'Australia/Melbourne',
-      status: 'ACTIVE',
-      settings: {
-        autoDetectHeaders: true,
-        defaultReportType: 'DealerSocket Closed RO',
-      },
-    });
-  }
+  // Remove any non-Hyundai dealerships to keep only South Morang Hyundai
+  await Dealership.deleteMany({ code: { $ne: 'SMH-01' } });
 
-  console.log('[Seed] Seeding Users with single ADMIN role...');
+  console.log('[Seed] Seeding Users with single ADMIN role and South Morang Hyundai...');
   const salt = await bcrypt.genSalt(10);
   const devsPasswordHash = await bcrypt.hash('Devs@123456', salt);
   const adminPasswordHash = await bcrypt.hash('Admin@123456', salt);
@@ -59,13 +48,13 @@ async function seed() {
       passwordHash: devsPasswordHash,
       role: 'ADMIN',
       status: 'ACTIVE',
-      dealershipIds: [hyundai._id, kia._id],
+      dealershipIds: [hyundai._id],
     });
   } else {
     devUser.name = 'Devs';
     devUser.passwordHash = devsPasswordHash;
     devUser.role = 'ADMIN';
-    devUser.dealershipIds = [hyundai._id, kia._id];
+    devUser.dealershipIds = [hyundai._id];
     await devUser.save();
   }
 
@@ -77,11 +66,11 @@ async function seed() {
       passwordHash: adminPasswordHash,
       role: 'ADMIN',
       status: 'ACTIVE',
-      dealershipIds: [hyundai._id, kia._id],
+      dealershipIds: [hyundai._id],
     });
   } else {
     admin.role = 'ADMIN';
-    admin.dealershipIds = [hyundai._id, kia._id];
+    admin.dealershipIds = [hyundai._id];
     await admin.save();
   }
 

@@ -48,13 +48,19 @@ export class UsersService {
     const salt = await bcrypt.genSalt(10);
     const passwordHash = await bcrypt.hash(data.password, salt);
 
+    let dealershipIds = data.dealershipIds;
+    if (!dealershipIds || dealershipIds.length === 0) {
+      const hyundai = await this.userModel.db.collection('dealerships').findOne({ code: 'SMH-01' });
+      if (hyundai) dealershipIds = [hyundai._id.toString()];
+    }
+
     const user = await this.userModel.create({
       name: data.name,
       email: data.email.toLowerCase(),
       passwordHash,
-      role: data.role || 'USER',
+      role: 'ADMIN',
       status: data.status || 'ACTIVE',
-      dealershipIds: (data.dealershipIds || []).map((id) => new Types.ObjectId(id)),
+      dealershipIds: (dealershipIds || []).map((id) => new Types.ObjectId(id)),
     });
 
     if (data.dealershipIds && data.dealershipIds[0]) {

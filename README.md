@@ -73,5 +73,5 @@ npm run build
 npm run start:prod
 ```
 
-Default API endpoint: `http://localhost:5000/api`
-Health check: `http://localhost:5000/api/health`
+Default API endpoint: `http://localhost:7000/api`
+Health check: `http://localhost:7000/api/health`
