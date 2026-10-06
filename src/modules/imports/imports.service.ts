@@ -124,7 +124,7 @@ export class ImportsService {
       } else if (norm === 'campaign' || norm.includes('campaign_name')) {
         targetField = 'campaignName';
         dataType = 'string';
-      } else if (norm === 'insert' || norm.includes('insert_date')) {
+      } else if (norm === 'insert' || norm.includes('insert') || norm.includes('insert_date')) {
         targetField = 'campaignInsertDate';
         dataType = 'date';
         transformation = 'parse_date';
@@ -262,6 +262,10 @@ export class ImportsService {
           record.externalEntityId = transformed ? String(transformed) : undefined;
         } else if (m.targetField === 'customerName') {
           record.customerName = transformed ? String(transformed) : undefined;
+        } else if (m.targetField === 'customerEmail') {
+          record.customerEmail = transformed ? String(transformed).toLowerCase().trim() : undefined;
+        } else if (m.targetField === 'customerPhone') {
+          record.customerPhone = transformed ? String(transformed).trim() : undefined;
         } else if (m.targetField === 'vehicle.year') {
           record.vehicle.year = transformed ? Number(transformed) : undefined;
         } else if (m.targetField === 'vehicle.make') {
@@ -278,6 +282,8 @@ export class ImportsService {
           record.closeDate = transformed;
         } else if (m.targetField === 'roAmount') {
           record.roAmount = transformed !== null ? Number(transformed) : undefined;
+        } else if (m.targetField === 'nOrU') {
+          record.nOrU = transformed ? String(transformed) : undefined;
         } else if (m.targetField.startsWith('custom_')) {
           record.customFields[m.targetField.replace('custom_', '')] = transformed;
         } else {
@@ -462,6 +468,8 @@ export class ImportsService {
             record.closeDate = transformed;
           } else if (m.targetField === 'roAmount') {
             record.roAmount = transformed !== null ? Number(transformed) : undefined;
+          } else if (m.targetField === 'nOrU') {
+            record.nOrU = transformed ? String(transformed) : undefined;
           } else if (m.targetField.startsWith('custom_')) {
             record.customFields[m.targetField.replace('custom_', '')] = transformed;
           } else {

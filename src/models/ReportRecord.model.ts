@@ -21,6 +21,7 @@ export interface IReportRecord extends Document {
   eventNumber?: string;
   closeDate?: Date;
   roAmount?: number;
+  nOrU?: string;
   customFields: Record<string, any>;
   sourceData: Record<string, any>;
   recordStatus: RecordStatus;
@@ -48,6 +49,7 @@ const ReportRecordSchema = new Schema<IReportRecord>(
     eventNumber: { type: String, trim: true, index: true },
     closeDate: { type: Date },
     roAmount: { type: Number },
+    nOrU: { type: String, trim: true },
     customFields: { type: Schema.Types.Mixed, default: {} },
     sourceData: { type: Schema.Types.Mixed, required: true },
     recordStatus: {

@@ -22,53 +22,106 @@ export interface PdfParseResult {
 
 export class PdfParser {
   static async parse(buffer: Buffer): Promise<PdfParseResult> {
-    const pdfData = await pdf(buffer);
-    const rawText = pdfData.text || '';
-    const lines = rawText
-      .split(/\r?\n/)
-      .map((l) => l.trim())
-      .filter((l) => l.length > 0);
+    const pagesData: { pageIndex: number; items: any[] }[] = [];
 
-    const metadata: PdfMetadata = {};
+    // Capture text content items with precise X, Y coordinates and dimensions
+    const pagerender = (pageData: any) => {
+      return pageData.getTextContent().then((textContent: any) => {
+        pagesData.push({
+          pageIndex: pageData.pageIndex,
+          items: textContent.items || [],
+        });
+        return '';
+      });
+    };
+
+    let rawText = '';
+    try {
+      const pdfData = await pdf(buffer, { pagerender });
+      rawText = pdfData.text || '';
+    } catch (e: any) {
+      // In case custom pagerender fails, try basic parse
+      const pdfData = await pdf(buffer);
+      rawText = pdfData.text || '';
+    }
+
+    const metadata: PdfMetadata = {
+      reportTitle: 'Campaign Summary Service Detail',
+      dealershipName: 'South Morang Hyundai',
+    };
     const warnings: string[] = [];
 
-    // 1. Extract metadata from header lines
-    for (let i = 0; i < Math.min(lines.length, 30); i++) {
-      const line = lines[i];
+    let headerColumns: { str: string; x: number; w: number; right: number }[] = [];
+    let headerY: number | null = null;
+    let detectedHeaders: string[] = [];
 
-      if (/^Report:\s*/i.test(line)) {
-        metadata.dealershipName = line.replace(/^Report:\s*/i, '').trim();
-        if (!metadata.dealershipName && i + 1 < lines.length) {
-          metadata.dealershipName = lines[i + 1].trim();
+    // Step 1: Scan for Metadata and Table Header Row using item coordinates
+    for (const page of pagesData) {
+      const lineMap = new Map<number, any[]>();
+      for (const item of page.items) {
+        const y = Math.round(item.transform[5]);
+        let foundY: number | null = null;
+        for (const ey of lineMap.keys()) {
+          if (Math.abs(ey - y) <= 2.5) {
+            foundY = ey;
+            break;
+          }
         }
-      } else if (/^South Morang Hyundai/i.test(line) && !metadata.dealershipName) {
-        metadata.dealershipName = line;
-      }
-
-      if (/^Campaign Name:\s*/i.test(line)) {
-        metadata.campaignName = line.replace(/^Campaign Name:\s*/i, '').trim();
-        if (!metadata.campaignName && i + 1 < lines.length) {
-          metadata.campaignName = lines[i + 1].trim();
-        }
-      }
-
-      if (/^Report Date:\s*/i.test(line)) {
-        metadata.reportDateRange = line.replace(/^Report Date:\s*/i, '').trim();
-        if (!metadata.reportDateRange && i + 1 < lines.length) {
-          metadata.reportDateRange = lines[i + 1].trim();
+        if (foundY !== null) {
+          lineMap.get(foundY)!.push(item);
+        } else {
+          lineMap.set(y, [item]);
         }
       }
 
-      if (/^Record Count:\s*/i.test(line)) {
-        const countStr = line.replace(/^Record Count:\s*/i, '').trim() || (i + 1 < lines.length ? lines[i + 1].trim() : '');
-        const count = parseInt(countStr, 10);
-        if (!isNaN(count)) metadata.recordCountExpected = count;
+      const sortedYs = Array.from(lineMap.keys()).sort((a, b) => b - a);
+
+      for (const y of sortedYs) {
+        const lineItems = lineMap.get(y)!.sort((a, b) => a.transform[4] - b.transform[4]);
+        const lineText = lineItems
+          .map((i) => i.str.replace(/\u00a0/g, ' ').trim())
+          .filter(Boolean)
+          .join(' ');
+
+        if (/Campaign\s*Name:\s*/i.test(lineText)) {
+          metadata.campaignName = lineText.replace(/.*Campaign\s*Name:\s*/i, '').trim();
+        }
+        if (/Report\s*Date:\s*/i.test(lineText)) {
+          const m = lineText.match(/Report\s*Date:\s*([^\s]+(?:\s*[-–—­]\s*[^\s]+)?)/i);
+          if (m) metadata.reportDateRange = m[1].replace(/­/g, '-').trim();
+        }
+        if (/Record\s*Count:\s*(\d+)/i.test(lineText)) {
+          const m = lineText.match(/Record\s*Count:\s*(\d+)/i);
+          if (m) metadata.recordCountExpected = parseInt(m[1], 10);
+        }
+        if (/South\s*Morang\s*Hyundai/i.test(lineText)) {
+          metadata.dealershipName = 'South Morang Hyundai';
+        }
+
+        if (
+          headerColumns.length === 0 &&
+          lineText.includes('Entity') &&
+          (lineText.includes('Customer') || lineText.includes('Amount') || lineText.includes('RO'))
+        ) {
+          headerY = y;
+          const rawCols = lineItems
+            .map((i) => ({
+              str: i.str.replace(/\u00a0/g, ' ').trim(),
+              x: i.transform[4],
+              w: i.width,
+              right: i.transform[4] + i.width,
+            }))
+            .filter((i) => i.str.length > 0);
+
+          headerColumns = rawCols;
+          detectedHeaders = headerColumns.map((h) => h.str);
+        }
       }
     }
 
     // Parse date range if found
     if (metadata.reportDateRange) {
-      const dateParts = metadata.reportDateRange.split(/\s*-\s*|\s+to\s+/i);
+      const dateParts = metadata.reportDateRange.split(/\s*[-–—]\s*|\s+to\s+/i);
       if (dateParts.length === 2) {
         const dFrom = new Date(dateParts[0].trim());
         const dTo = new Date(dateParts[1].trim());
@@ -77,93 +130,128 @@ export class PdfParser {
       }
     }
 
-    // 2. Identify header row and table lines
-    const standardHeaders = [
-      'Entity ID',
-      'Customer Name',
-      'N/U',
-      'Year',
-      'Make/Model',
-      'Campaign',
-      'Insert',
-      'Event#',
-      'Close Date',
-      'RO Amount',
-    ];
+    const dataRows: Record<string, any>[] = [];
 
-    let headerIndex = -1;
-    let detectedHeaders: string[] = [];
+    // Step 2: Coordinate-based row extraction if table headers were identified
+    if (headerColumns.length > 0) {
+      const columnRanges = headerColumns.map((c, i) => {
+        const left = i === 0 ? 0 : (headerColumns[i - 1].right + c.x) / 2;
+        const right = i === headerColumns.length - 1 ? 99999 : (c.right + headerColumns[i + 1].x) / 2;
+        return { name: c.str, left, right };
+      });
 
-    for (let i = 0; i < Math.min(lines.length, 40); i++) {
-      const line = lines[i];
-      // Check if line contains several header keywords
-      const matches = standardHeaders.filter((h) =>
-        new RegExp(h.replace(/[^a-zA-Z0-9]/g, '\\$&'), 'i').test(line)
-      );
+      for (const page of pagesData) {
+        const lineMap = new Map<number, any[]>();
+        for (const item of page.items) {
+          const y = Math.round(item.transform[5]);
+          let foundY: number | null = null;
+          for (const ey of lineMap.keys()) {
+            if (Math.abs(ey - y) <= 2.5) {
+              foundY = ey;
+              break;
+            }
+          }
+          if (foundY !== null) {
+            lineMap.get(foundY)!.push(item);
+          } else {
+            lineMap.set(y, [item]);
+          }
+        }
 
-      if (matches.length >= 3) {
-        headerIndex = i;
-        detectedHeaders = standardHeaders; // Default to standard
-        break;
-      }
-    }
+        const sortedYs = Array.from(lineMap.keys()).sort((a, b) => b - a);
 
-    // If headers weren't found on a single line, check if headers were listed across multiple lines
-    if (headerIndex === -1) {
-      for (let i = 0; i < Math.min(lines.length, 30); i++) {
-        if (/Entity\s*ID/i.test(lines[i])) {
-          headerIndex = i;
-          detectedHeaders = standardHeaders;
-          break;
+        for (const y of sortedYs) {
+          // Skip header and title lines on page 1
+          if (page.pageIndex === 0 && headerY !== null && y >= headerY - 2) {
+            continue;
+          }
+
+          const lineItems = lineMap.get(y)!.sort((a, b) => a.transform[4] - b.transform[4]);
+          const lineText = lineItems
+            .map((i) => i.str.replace(/\u00a0/g, ' ').trim())
+            .filter(Boolean)
+            .join(' ');
+
+          if (
+            lineText.includes('Total') ||
+            lineText.includes('Confidential') ||
+            lineText.startsWith('Page ') ||
+            lineText.includes('Campaign Summary') ||
+            lineText.includes('Report Date:') ||
+            lineText.includes('Record Count:') ||
+            lineText.includes('Entity ID')
+          ) {
+            continue;
+          }
+
+          const row: Record<string, any> = {};
+          headerColumns.forEach((h) => {
+            row[h.str] = '';
+          });
+
+          for (const item of lineItems) {
+            const text = item.str.replace(/\u00a0/g, ' ').trim();
+            if (!text) continue;
+            const center = item.transform[4] + item.width / 2;
+            const col = columnRanges.find((r) => center >= r.left && center < r.right);
+            if (col) {
+              row[col.name] = (row[col.name] ? row[col.name] + ' ' + text : text).trim();
+            }
+          }
+
+          // Verify row has minimal data (Entity ID and either Amount, Close Date, or Customer Name)
+          if (row['Entity ID'] && (row['RO Amount'] || row['Close Date'] || row['Customer Name'])) {
+            if (!row['Campaign'] && metadata.campaignName) {
+              row['Campaign'] = metadata.campaignName;
+            }
+            row['sourceData'] = { rawLine: lineText };
+            dataRows.push(row);
+          }
         }
       }
     }
 
-    if (detectedHeaders.length === 0) {
+    // Step 3: Fallback line parser if coordinate extraction yielded no rows
+    if (dataRows.length === 0) {
+      warnings.push('Coordinate extraction not applicable, using enhanced line parser');
+      const lines = rawText
+        .split(/\r?\n/)
+        .map((l) => l.trim())
+        .filter((l) => l.length > 0);
+
+      const standardHeaders = [
+        'Entity ID',
+        'Customer Name',
+        'N/U',
+        'Year',
+        'Make/Model',
+        'Campaign Insert',
+        'Event#',
+        'Close Date',
+        'RO Amount',
+      ];
       detectedHeaders = standardHeaders;
-    }
 
-    // 3. Extract table rows
-    const dataRows: Record<string, any>[] = [];
-    const startIndex = headerIndex !== -1 ? headerIndex + 1 : 0;
+      for (const line of lines) {
+        if (
+          /^(Page\s+\d+|Confidential|Total|Summary|Campaign Name:|Report Date:|Record Count:|Report:)/i.test(
+            line
+          ) ||
+          line.startsWith('---') ||
+          line.startsWith('===')
+        ) {
+          continue;
+        }
 
-    for (let i = startIndex; i < lines.length; i++) {
-      const line = lines[i];
-
-      // Skip common non-data lines
-      if (
-        /^(Page\s+\d+|Confidential|Total|Summary|Campaign Name:|Report Date:|Record Count:|Report:)/i.test(
-          line
-        ) ||
-        line.startsWith('---') ||
-        line.startsWith('===')
-      ) {
-        continue;
-      }
-
-      // Check if line looks like a tabular row:
-      // Typically: [EntityID] [Customer Name] [N/U] [Year] [Make/Model] [Campaign] [InsertDate] [Event#] [CloseDate] [RO Amount]
-      // Or tab/pipe/multi-space delimited
-      const tokens = line.split(/\t+|\s{2,}|\|/).map((t) => t.trim()).filter(Boolean);
-
-      if (tokens.length >= 4) {
-        const row: Record<string, any> = {};
-        detectedHeaders.forEach((header, idx) => {
-          row[header] = tokens[idx] !== undefined ? tokens[idx] : '';
-        });
-        row['sourceData'] = { rawLine: line, tokens };
-        dataRows.push(row);
-      } else {
-        // Advanced extraction for concatenated or tabular PDF rows
         const currencyMatch = line.match(/\$?(\d+[\d,]*\.\d{2})$/);
-        const entityMatch = line.match(/^([A-Z0-9\-]+)/);
+        // NOTE: Strictly match entity digits/ID, DO NOT consume the initial capital letter of customer name!
+        const entityMatch = line.match(/^(\d{3,}[A-Za-z]?|\b[A-Za-z0-9]{4,8}\b)/);
 
         if (currencyMatch && entityMatch) {
           const entityId = entityMatch[1];
           const roAmount = currencyMatch[0];
-          let remainder = line.substring(entityId.length, line.length - roAmount.length);
+          let remainder = line.substring(entityId.length, line.length - roAmount.length).trim();
 
-          // Find dates
           const dateMatches = [...remainder.matchAll(/\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}/g)];
           let insertDate = '';
           let closeDate = '';
@@ -174,59 +262,32 @@ export class PdfParser {
             closeDate = dateMatches[0][0];
           }
 
-          // Find Event#
-          const eventMatch = remainder.match(/EV-?\d+/i);
-          const eventNumber = eventMatch ? eventMatch[0] : '';
+          const eventMatch = remainder.match(/(?:EV-?|\b)(\d{5,7})\b/i);
+          const eventNumber = eventMatch ? eventMatch[1] : '';
 
-          // Find Year (4 digits: 19xx or 20xx)
-          const yearMatch = remainder.match(/\b(19\d{2}|20\d{2})\b/);
-          const year = yearMatch ? yearMatch[0] : '';
-
-          // Find N/U (char immediately before year or standalone)
-          let nu = '';
-          if (yearMatch && yearMatch.index !== undefined && yearMatch.index > 0) {
-            const charBeforeYear = remainder[yearMatch.index - 1];
-            if (charBeforeYear === 'N' || charBeforeYear === 'U') {
-              nu = charBeforeYear;
-              remainder = remainder.substring(0, yearMatch.index - 1) + ' ' + remainder.substring(yearMatch.index);
-            }
+          // Match customer name from start up to date or event or spaces
+          let customerName = remainder;
+          if (insertDate) {
+            customerName = customerName.substring(0, customerName.indexOf(insertDate)).trim();
+          } else if (closeDate) {
+            customerName = customerName.substring(0, customerName.indexOf(closeDate)).trim();
+          } else if (eventNumber) {
+            customerName = customerName.substring(0, customerName.indexOf(eventNumber)).trim();
           }
 
-          // Find Customer Name (text before year)
-          let customerName = 'Unknown';
-          if (yearMatch && yearMatch.index !== undefined) {
-            customerName = remainder.substring(0, yearMatch.index).trim();
-          }
-
-          // Find Make/Model
-          let makeModel = '';
-          if (yearMatch && yearMatch.index !== undefined) {
-            const afterYear = remainder.substring(yearMatch.index + 4);
-            const campaignPos = metadata.campaignName ? afterYear.indexOf(metadata.campaignName) : -1;
-            if (campaignPos !== -1) {
-              makeModel = afterYear.substring(0, campaignPos).trim();
-            } else {
-              const firstDatePos = dateMatches[0] ? afterYear.indexOf(dateMatches[0][0]) : -1;
-              if (firstDatePos !== -1) {
-                makeModel = afterYear.substring(0, firstDatePos).replace(/HY Closed RO|Campaign/i, '').trim();
-              }
-            }
-          }
-
-          const row: Record<string, any> = {
+          dataRows.push({
             'Entity ID': entityId,
             'Customer Name': customerName || 'Unknown',
-            'N/U': nu,
-            'Year': year,
-            'Make/Model': makeModel || 'Hyundai',
-            'Campaign': metadata.campaignName || 'HY Closed RO',
-            'Insert': insertDate || '9/28/2026',
+            'N/U': '',
+            'Year': '',
+            'Make/Model': 'Hyundai',
+            'Campaign Insert': insertDate,
             'Event#': eventNumber,
             'Close Date': closeDate,
             'RO Amount': roAmount,
+            'Campaign': metadata.campaignName || 'HY Closed RO',
             sourceData: { rawLine: line },
-          };
-          dataRows.push(row);
+          });
         }
       }
     }
@@ -234,17 +295,27 @@ export class PdfParser {
     let confidence: 'high' | 'medium' | 'low' = 'high';
     if (dataRows.length === 0) {
       confidence = 'low';
-      warnings.push('Could not confidently extract tabular records from the PDF. Manual review recommended.');
+      warnings.push('Could not extract tabular records from the PDF. Manual review recommended.');
     } else if (metadata.recordCountExpected && dataRows.length < metadata.recordCountExpected * 0.7) {
       confidence = 'medium';
       warnings.push(
-        `Extracted ${dataRows.length} rows, but PDF header indicated ${metadata.recordCountExpected} records. Please inspect preview.`
+        `Extracted ${dataRows.length} rows, but PDF header indicated ${metadata.recordCountExpected} records.`
       );
     }
 
     return {
       metadata,
-      headers: detectedHeaders,
+      headers: detectedHeaders.length > 0 ? detectedHeaders : [
+        'Entity ID',
+        'Customer Name',
+        'N/U',
+        'Year',
+        'Make/Model',
+        'Campaign Insert',
+        'Event#',
+        'Close Date',
+        'RO Amount',
+      ],
       rows: dataRows,
       totalRows: dataRows.length,
       confidence,
