@@ -27,6 +27,8 @@ export class RecordsController {
     @Query('recordStatus') recordStatus?: RecordStatus,
     @Query('sortBy') sortBy?: string,
     @Query('sortOrder') sortOrder?: 'asc' | 'desc',
+    @Query('dateFrom') dateFrom?: string,
+    @Query('dateTo') dateTo?: string,
     @Query('page') page?: number,
     @Query('limit') limit?: number
   ) {
@@ -35,6 +37,8 @@ export class RecordsController {
       recordStatus,
       sortBy,
       sortOrder,
+      dateFrom,
+      dateTo,
       page,
       limit,
     });

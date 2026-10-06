@@ -191,18 +191,39 @@ export class ReportsService {
     return newReport;
   }
 
-  async generatePdf(id: string, templateId?: string): Promise<Buffer> {
+  async generatePdf(
+    id: string,
+    templateId?: string,
+    customSettings?: any,
+    dateFrom?: string,
+    dateTo?: string
+  ): Promise<Buffer> {
     const report = await this.reportModel.findById(id).populate('dealershipId');
     if (!report) throw new NotFoundException('Report not found');
 
-    const records = await this.reportRecordModel.find({ reportId: id }).sort({ closeDate: -1 });
+    const filter: any = { reportId: new Types.ObjectId(id) };
+    if (dateFrom || dateTo) {
+      filter.closeDate = {};
+      if (dateFrom) filter.closeDate.$gte = new Date(dateFrom);
+      if (dateTo) {
+        const toDate = new Date(dateTo);
+        toDate.setHours(23, 59, 59, 999);
+        filter.closeDate.$lte = toDate;
+      }
+    }
 
-    let templateSettings: any;
-    if (templateId) {
+    const records = await this.reportRecordModel.find(filter).sort({ closeDate: -1 });
+
+    let templateSettings: any = customSettings;
+    if (!templateSettings && templateId) {
       const template = await this.templateModel.findById(templateId);
       if (template?.pdfSettings) {
         templateSettings = template.pdfSettings;
       }
+    }
+
+    if (dateFrom && dateTo && templateSettings) {
+      templateSettings.dateRangeText = `${new Date(dateFrom).toLocaleDateString()} - ${new Date(dateTo).toLocaleDateString()}`;
     }
 
     return PdfGenerator.generateReportPdf(report, records, templateSettings);

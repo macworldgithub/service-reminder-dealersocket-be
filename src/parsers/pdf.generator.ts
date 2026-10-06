@@ -4,6 +4,89 @@ import { IReport } from '../models/Report.model';
 import { IPdfTemplateSettings } from '../models/Template.model';
 
 export class PdfGenerator {
+  static extractFieldValue(rec: any, fieldKey: string): string {
+    if (!fieldKey || !rec) return '';
+
+    // Standard direct/known fields
+    if (fieldKey === 'externalEntityId') return rec.externalEntityId || '';
+    if (fieldKey === 'customerName') return rec.customerName || '';
+    if (fieldKey === 'vehicle.year' || fieldKey === 'year') {
+      return rec.vehicle?.year ? String(rec.vehicle.year) : (rec.year ? String(rec.year) : '');
+    }
+    if (fieldKey === 'vehicle.make' || fieldKey === 'make') {
+      return rec.vehicle?.make || rec.make || '';
+    }
+    if (fieldKey === 'vehicle.model' || fieldKey === 'model') {
+      return rec.vehicle?.model || rec.model || '';
+    }
+    if (fieldKey === 'vehicle.vin' || fieldKey === 'vin' || fieldKey === 'VIN') {
+      return rec.vehicle?.vin || rec.vin || rec.sourceData?.VIN || rec.sourceData?.vin || '';
+    }
+    if (fieldKey === 'vehicle' || fieldKey === 'vehicle.combined') {
+      return [rec.vehicle?.year, rec.vehicle?.make, rec.vehicle?.model].filter(Boolean).join(' ') || '';
+    }
+    if (fieldKey === 'campaignName' || fieldKey === 'campaign') return rec.campaignName || '';
+    if (fieldKey === 'campaignInsertDate') {
+      return rec.campaignInsertDate ? new Date(rec.campaignInsertDate).toLocaleDateString() : '';
+    }
+    if (fieldKey === 'eventNumber' || fieldKey === 'event') return rec.eventNumber || '';
+    if (fieldKey === 'closeDate') {
+      return rec.closeDate ? new Date(rec.closeDate).toLocaleDateString() : '';
+    }
+    if (fieldKey === 'roAmount') {
+      return rec.roAmount !== undefined && rec.roAmount !== null ? `$${Number(rec.roAmount).toFixed(2)}` : '';
+    }
+    if (fieldKey === 'recordStatus' || fieldKey === 'status') {
+      return rec.recordStatus || '';
+    }
+    if (fieldKey === 'validationNotes') {
+      return Array.isArray(rec.validationNotes) ? rec.validationNotes.join('; ') : '';
+    }
+    if (fieldKey === 'nOrU' || fieldKey === 'nu' || fieldKey === 'N/U') {
+      return rec.customFields?.nOrU || rec.customFields?.nu || rec.sourceData?.['N/U'] || rec.sourceData?.NU || '';
+    }
+
+    // Nested property resolution (e.g. "vehicle.trim", "sourceData.Technician")
+    if (fieldKey.includes('.')) {
+      const parts = fieldKey.split('.');
+      let val = rec;
+      for (const p of parts) {
+        val = val?.[p];
+      }
+      if (val !== undefined && val !== null) {
+        if (val instanceof Date) return val.toLocaleDateString();
+        return String(val);
+      }
+    }
+
+    // Direct match on record
+    if (rec[fieldKey] !== undefined && rec[fieldKey] !== null) {
+      const val = rec[fieldKey];
+      if (val instanceof Date) return val.toLocaleDateString();
+      return String(val);
+    }
+
+    // Check customFields
+    if (rec.customFields?.[fieldKey] !== undefined && rec.customFields?.[fieldKey] !== null) {
+      return String(rec.customFields[fieldKey]);
+    }
+
+    // Check sourceData (exact match and case-insensitive match)
+    if (rec.sourceData) {
+      if (rec.sourceData[fieldKey] !== undefined && rec.sourceData[fieldKey] !== null) {
+        return String(rec.sourceData[fieldKey]);
+      }
+      const lowerKey = fieldKey.toLowerCase().replace(/[^a-z0-9]/g, '');
+      for (const [k, v] of Object.entries(rec.sourceData)) {
+        if (k.toLowerCase().replace(/[^a-z0-9]/g, '') === lowerKey) {
+          return String(v);
+        }
+      }
+    }
+
+    return '';
+  }
+
   static generateReportPdf(
     report: IReport,
     records: IReportRecord[],
@@ -81,16 +164,16 @@ export class PdfGenerator {
       doc.font('Helvetica-Bold').fillColor('#2563eb').text(String(records.length || report.recordCount || 0), rightX + 265, 74);
 
       // Table Setup
-      const activeColumns = (settings.columns || []).filter((c) => c.visible !== false);
+      const activeColumns = (settings.columns || []).filter((c: any) => c.visible !== false);
       const startY = 120;
       let currentY = startY;
       const colWidth = 770 / Math.max(activeColumns.length, 1);
 
       // Table Header Row
-      doc.rect(36, currentY, 770, 24).fill('#0f172a');
+      doc.rect(36, currentY, 770, 24).fill(settings.primaryColor || '#0f172a');
       doc.font('Helvetica-Bold').fontSize(8.5).fillColor('#ffffff');
 
-      activeColumns.forEach((col, idx) => {
+      activeColumns.forEach((col: any, idx: number) => {
         doc.text(col.label.toUpperCase(), 42 + idx * colWidth, currentY + 7, {
           width: colWidth - 10,
           ellipsis: true,
@@ -109,9 +192,9 @@ export class PdfGenerator {
           currentY = 40;
 
           // Repeat header on new page
-          doc.rect(36, currentY, 770, 20).fill('#0f172a');
+          doc.rect(36, currentY, 770, 20).fill(settings.primaryColor || '#0f172a');
           doc.font('Helvetica-Bold').fontSize(8).fillColor('#ffffff');
-          activeColumns.forEach((col, idx) => {
+          activeColumns.forEach((col: any, idx: number) => {
             doc.text(col.label.toUpperCase(), 42 + idx * colWidth, currentY + 5, {
               width: colWidth - 10,
               ellipsis: true,
@@ -129,22 +212,9 @@ export class PdfGenerator {
 
         doc.fillColor('#1e293b');
 
-        activeColumns.forEach((col, idx) => {
-          let val = '';
-          if (col.field === 'externalEntityId') val = rec.externalEntityId || '';
-          else if (col.field === 'customerName') val = rec.customerName || '';
-          else if (col.field === 'vehicle.year') val = rec.vehicle?.year ? String(rec.vehicle.year) : '';
-          else if (col.field === 'vehicle.model' || col.field === 'vehicle.make') {
-            val = [rec.vehicle?.make, rec.vehicle?.model].filter(Boolean).join(' ') || '';
-          } else if (col.field === 'campaignName') val = rec.campaignName || '';
-          else if (col.field === 'eventNumber') val = rec.eventNumber || '';
-          else if (col.field === 'closeDate') {
-            val = rec.closeDate ? new Date(rec.closeDate).toLocaleDateString() : '';
-          } else if (col.field === 'roAmount') {
-            val = rec.roAmount !== undefined && rec.roAmount !== null ? `$${rec.roAmount.toFixed(2)}` : '';
-          } else {
-            val = rec.customFields?.[col.field] || rec.sourceData?.[col.field] || '';
-          }
+        activeColumns.forEach((col: any, idx: number) => {
+          const fieldKey = col.field || col.key || '';
+          const val = PdfGenerator.extractFieldValue(rec, fieldKey);
 
           doc.text(String(val), 42 + idx * colWidth, currentY + 4, {
             width: colWidth - 10,

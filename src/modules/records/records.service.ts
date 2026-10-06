@@ -20,6 +20,8 @@ export class RecordsService {
       recordStatus?: RecordStatus;
       sortBy?: string;
       sortOrder?: 'asc' | 'desc';
+      dateFrom?: string;
+      dateTo?: string;
       page?: number;
       limit?: number;
     }
@@ -28,6 +30,18 @@ export class RecordsService {
 
     if (query.recordStatus) {
       filter.recordStatus = query.recordStatus;
+    }
+
+    if (query.dateFrom || query.dateTo) {
+      filter.closeDate = {};
+      if (query.dateFrom) {
+        filter.closeDate.$gte = new Date(query.dateFrom);
+      }
+      if (query.dateTo) {
+        const toDate = new Date(query.dateTo);
+        toDate.setHours(23, 59, 59, 999);
+        filter.closeDate.$lte = toDate;
+      }
     }
 
     if (query.search) {

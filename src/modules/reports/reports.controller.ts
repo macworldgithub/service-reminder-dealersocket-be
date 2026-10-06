@@ -95,9 +95,32 @@ export class ReportsController {
   async downloadPdf(
     @Param('id') id: string,
     @Query('templateId') templateId: string,
+    @Query('dateFrom') dateFrom: string,
+    @Query('dateTo') dateTo: string,
     @Res() res: Response
   ) {
-    const pdfBuffer = await this.reportsService.generatePdf(id, templateId);
+    const pdfBuffer = await this.reportsService.generatePdf(id, templateId, undefined, dateFrom, dateTo);
+    res.set({
+      'Content-Type': 'application/pdf',
+      'Content-Disposition': `attachment; filename="DealerSocket_Report_${id}.pdf"`,
+      'Content-Length': pdfBuffer.length,
+    });
+    res.send(pdfBuffer);
+  }
+
+  @Post(':id/pdf')
+  async generateCustomPdf(
+    @Param('id') id: string,
+    @Body() body: { templateSettings?: any; dateFrom?: string; dateTo?: string },
+    @Res() res: Response
+  ) {
+    const pdfBuffer = await this.reportsService.generatePdf(
+      id,
+      undefined,
+      body.templateSettings,
+      body.dateFrom,
+      body.dateTo
+    );
     res.set({
       'Content-Type': 'application/pdf',
       'Content-Disposition': `attachment; filename="DealerSocket_Report_${id}.pdf"`,
