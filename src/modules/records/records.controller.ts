@@ -136,4 +136,18 @@ export class RecordsController {
       data: result,
     };
   }
+
+  @Post('populate-emails')
+  @Roles('ADMIN')
+  async populateEmails(
+    @Param('reportId') reportId: string,
+    @CurrentUser('userId') userId: string
+  ) {
+    const result = await this.recordsService.populateMissingEmails(reportId, userId);
+    return {
+      success: true,
+      message: `Populated customer emails for ${result.modifiedCount} records`,
+      data: result,
+    };
+  }
 }

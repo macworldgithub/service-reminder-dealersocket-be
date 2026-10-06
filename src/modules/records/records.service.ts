@@ -248,4 +248,57 @@ export class RecordsService {
 
     return { modifiedCount: result.modifiedCount };
   }
+
+  async populateMissingEmails(reportId: string, userId: string) {
+    const report = await this.reportModel.findById(reportId);
+    if (!report) throw new NotFoundException('Report not found');
+
+    const records = await this.recordModel.find({
+      reportId: new Types.ObjectId(reportId),
+      $or: [
+        { customerEmail: { $exists: false } },
+        { customerEmail: null },
+        { customerEmail: '' },
+      ],
+    });
+
+    let count = 0;
+    for (const rec of records) {
+      let email = '';
+      if (rec.customerName && rec.customerName !== 'Unknown') {
+        const clean = rec.customerName
+          .toLowerCase()
+          .replace(/[^a-z0-9\s]/g, '')
+          .trim()
+          .replace(/\s+/g, '.');
+        email = `${clean}@gmail.com`;
+      } else {
+        email = `customer.${rec.externalEntityId || rec._id.toString().slice(-4)}@gmail.com`;
+      }
+
+      await this.recordModel.updateOne(
+        { _id: rec._id },
+        {
+          $set: {
+            customerEmail: email,
+            lastEditedBy: new Types.ObjectId(userId),
+          },
+        }
+      );
+      count++;
+    }
+
+    if (count > 0) {
+      await this.auditService.log({
+        dealershipId: report.dealershipId,
+        userId,
+        entityType: 'ReportRecord',
+        entityId: report._id,
+        action: 'RECORD_UPDATED',
+        metadata: { autoPopulatedEmailsCount: count },
+      });
+    }
+
+    return { modifiedCount: count };
+  }
 }

@@ -103,6 +103,12 @@ export class ImportsService {
       } else if (norm.includes('customer') || norm === 'name' || norm === 'client') {
         targetField = 'customerName';
         dataType = 'string';
+      } else if (norm.includes('email') || norm === 'e_mail' || norm === 'mail') {
+        targetField = 'customerEmail';
+        dataType = 'string';
+      } else if (norm.includes('phone') || norm.includes('mobile') || norm.includes('cell')) {
+        targetField = 'customerPhone';
+        dataType = 'string';
       } else if (norm === 'year' || norm.includes('model_year')) {
         targetField = 'vehicle.year';
         dataType = 'number';
@@ -436,6 +442,10 @@ export class ImportsService {
             record.externalEntityId = transformed ? String(transformed) : undefined;
           } else if (m.targetField === 'customerName') {
             record.customerName = transformed ? String(transformed) : undefined;
+          } else if (m.targetField === 'customerEmail') {
+            record.customerEmail = transformed ? String(transformed).toLowerCase().trim() : undefined;
+          } else if (m.targetField === 'customerPhone') {
+            record.customerPhone = transformed ? String(transformed).trim() : undefined;
           } else if (m.targetField === 'vehicle.year') {
             record.vehicle.year = transformed ? Number(transformed) : undefined;
           } else if (m.targetField === 'vehicle.make') {

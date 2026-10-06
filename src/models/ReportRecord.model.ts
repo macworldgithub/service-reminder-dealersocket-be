@@ -13,6 +13,8 @@ export interface IReportRecord extends Document {
   dealershipId: mongoose.Types.ObjectId;
   externalEntityId?: string;
   customerName?: string;
+  customerEmail?: string;
+  customerPhone?: string;
   vehicle: IVehicle;
   campaignName?: string;
   campaignInsertDate?: Date;
@@ -34,6 +36,8 @@ const ReportRecordSchema = new Schema<IReportRecord>(
     dealershipId: { type: Schema.Types.ObjectId, ref: 'Dealership', required: true, index: true },
     externalEntityId: { type: String, trim: true, index: true },
     customerName: { type: String, trim: true },
+    customerEmail: { type: String, trim: true, lowercase: true },
+    customerPhone: { type: String, trim: true },
     vehicle: {
       year: { type: Number },
       make: { type: String, trim: true },

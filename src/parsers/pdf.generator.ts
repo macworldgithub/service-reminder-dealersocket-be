@@ -10,6 +10,12 @@ export class PdfGenerator {
     // Standard direct/known fields
     if (fieldKey === 'externalEntityId') return rec.externalEntityId || '';
     if (fieldKey === 'customerName') return rec.customerName || '';
+    if (fieldKey === 'customerEmail' || fieldKey === 'email' || fieldKey === 'Email') {
+      return rec.customerEmail || rec.customFields?.customerEmail || rec.customFields?.email || rec.sourceData?.Email || rec.sourceData?.email || '';
+    }
+    if (fieldKey === 'customerPhone' || fieldKey === 'phone' || fieldKey === 'Phone') {
+      return rec.customerPhone || rec.customFields?.customerPhone || rec.customFields?.phone || rec.sourceData?.Phone || rec.sourceData?.phone || '';
+    }
     if (fieldKey === 'vehicle.year' || fieldKey === 'year') {
       return rec.vehicle?.year ? String(rec.vehicle.year) : (rec.year ? String(rec.year) : '');
     }
