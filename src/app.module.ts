@@ -12,6 +12,7 @@ import { MappingsModule } from './modules/mappings/mappings.module';
 import { AuditModule } from './modules/audit/audit.module';
 import { TemplatesModule } from './modules/templates/templates.module';
 import { CampaignsModule } from './modules/campaigns/campaigns.module';
+import { WebhooksModule } from './modules/webhooks/webhooks.module';
 import { AppController } from './app.controller';
 
 @Module({
@@ -32,6 +33,7 @@ import { AppController } from './app.controller';
     AuditModule,
     TemplatesModule,
     CampaignsModule,
+    WebhooksModule,
   ],
   controllers: [AppController],
 })

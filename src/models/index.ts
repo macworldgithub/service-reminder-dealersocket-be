@@ -7,3 +7,4 @@ export * from './ColumnMapping.model';
 export * from './AuditLog.model';
 export * from './Template.model';
 export * from './Campaign.model';
+export * from './WebhookLog.model';
