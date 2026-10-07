@@ -1,4 +1,5 @@
-import PDFDocument from 'pdfkit';
+import * as _PDFDocument from 'pdfkit';
+const PDFDocument: any = (_PDFDocument as any).default || _PDFDocument;
 import { IReportRecord } from '../models/ReportRecord.model';
 import { IReport } from '../models/Report.model';
 import { IPdfTemplateSettings } from '../models/Template.model';
@@ -23,7 +24,7 @@ export class PdfGenerator {
       return rec.vehicle?.make || rec.make || '';
     }
     if (fieldKey === 'vehicle.model' || fieldKey === 'model') {
-      return rec.vehicle?.model || rec.model || '';
+      return rec.vehicle?.model || (typeof rec.model === 'string' ? rec.model : '');
     }
     if (fieldKey === 'vehicle.vin' || fieldKey === 'vin' || fieldKey === 'VIN') {
       return rec.vehicle?.vin || rec.vin || rec.sourceData?.VIN || rec.sourceData?.vin || '';
@@ -60,6 +61,7 @@ export class PdfGenerator {
         val = val?.[p];
       }
       if (val !== undefined && val !== null) {
+        if (typeof val === 'function') return '';
         if (val instanceof Date) return val.toLocaleDateString();
         return String(val);
       }
@@ -68,6 +70,7 @@ export class PdfGenerator {
     // Direct match on record
     if (rec[fieldKey] !== undefined && rec[fieldKey] !== null) {
       const val = rec[fieldKey];
+      if (typeof val === 'function') return '';
       if (val instanceof Date) return val.toLocaleDateString();
       return String(val);
     }
@@ -94,8 +97,8 @@ export class PdfGenerator {
   }
 
   static generateReportPdf(
-    report: IReport,
-    records: IReportRecord[],
+    report: IReport | any,
+    records: any[],
     templateSettings?: IPdfTemplateSettings
   ): Promise<Buffer> {
     return new Promise((resolve, reject) => {
@@ -103,6 +106,7 @@ export class PdfGenerator {
         margin: 36,
         size: 'A4',
         layout: 'landscape',
+        bufferPages: true,
         info: {
           Title: report.name || 'DealerSocket Campaign Report',
           Author: 'DealerSocket Operations Hub',
@@ -193,7 +197,7 @@ export class PdfGenerator {
 
       records.forEach((rec, rowIndex) => {
         // Page break if near bottom
-        if (currentY > 520) {
+        if (currentY > 515) {
           doc.addPage({ margin: 36, size: 'A4', layout: 'landscape' });
           currentY = 40;
 
@@ -222,8 +226,9 @@ export class PdfGenerator {
           const fieldKey = col.field || col.key || '';
           const val = PdfGenerator.extractFieldValue(rec, fieldKey);
 
-          doc.text(String(val), 42 + idx * colWidth, currentY + 4, {
+          doc.text(String(val || ''), 42 + idx * colWidth, currentY + 4, {
             width: colWidth - 10,
+            lineBreak: false,
             ellipsis: true,
           });
         });
@@ -235,20 +240,22 @@ export class PdfGenerator {
       const totalPages = doc.bufferedPageRange().count;
       for (let i = 0; i < totalPages; i++) {
         doc.switchToPage(i);
+        doc.rect(36, 538, 770, 0.5).fill('#e2e8f0');
         doc.fontSize(8).fillColor('#94a3b8').text(
-          `${settings.footerNotes || 'DealerSocket Operations'} | Generated on ${new Date().toLocaleDateString()}`,
+          `${settings.footerNotes || 'DealerSocket Operations Hub - Confidential'} | Generated on ${new Date().toLocaleDateString()}`,
           36,
-          560,
-          { align: 'left', width: 400 }
+          545,
+          { align: 'left', width: 450, lineBreak: false }
         );
         doc.fontSize(8).fillColor('#94a3b8').text(
           `Page ${i + 1} of ${totalPages}`,
-          600,
-          560,
-          { align: 'right', width: 200 }
+          606,
+          545,
+          { align: 'right', width: 200, lineBreak: false }
         );
       }
 
+      doc.flushPages();
       doc.end();
     });
   }

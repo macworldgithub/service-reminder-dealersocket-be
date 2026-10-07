@@ -412,7 +412,7 @@ export class ReportsService {
       }
     }
 
-    const records = await this.reportRecordModel.find(filter).sort({ closeDate: -1 });
+    const records = await this.reportRecordModel.find(filter).sort({ closeDate: -1 }).lean();
 
     let templateSettings: any = customSettings;
     if (!templateSettings && templateId) {
