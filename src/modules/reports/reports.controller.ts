@@ -28,6 +28,8 @@ export class ReportsController {
     @Query('campaignName') campaignName?: string,
     @Query('status') status?: string,
     @Query('search') search?: string,
+    @Query('dateFrom') dateFrom?: string,
+    @Query('dateTo') dateTo?: string,
     @Query('page') page?: number,
     @Query('limit') limit?: number
   ) {
@@ -36,6 +38,8 @@ export class ReportsController {
       campaignName,
       status,
       search,
+      dateFrom,
+      dateTo,
       page,
       limit,
     });

@@ -7,10 +7,11 @@ import {
   Query,
   UseInterceptors,
   UploadedFile,
+  UploadedFiles,
   UseGuards,
   BadRequestException,
 } from '@nestjs/common';
-import { FileInterceptor } from '@nestjs/platform-express';
+import { FileInterceptor, FilesInterceptor } from '@nestjs/platform-express';
 import { ImportsService } from './imports.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
@@ -41,6 +42,38 @@ export class ImportsController {
     return {
       success: true,
       message: 'File analyzed successfully',
+      data: result,
+    };
+  }
+
+  @Post('upload-batch')
+  @Roles('ADMIN')
+  @UseInterceptors(
+    FilesInterceptor('files', 20, {
+      limits: { fileSize: 30 * 1024 * 1024 }, // 30MB per file
+    })
+  )
+  async uploadBatch(
+    @UploadedFiles() files: Express.Multer.File[],
+    @Body('dealershipId') dealershipId: string,
+    @Body('campaignName') campaignName: string,
+    @CurrentUser('userId') userId: string
+  ) {
+    if (!files || files.length === 0) {
+      throw new BadRequestException('At least one file is required for batch upload');
+    }
+    if (!dealershipId) throw new BadRequestException('dealershipId is required');
+
+    const result = await this.importsService.processBatchFiles({
+      files,
+      dealershipId,
+      userId,
+      campaignName,
+    });
+
+    return {
+      success: true,
+      message: `Batch processed: ${result.successful.length} of ${files.length} reports successfully ingested`,
       data: result,
     };
   }

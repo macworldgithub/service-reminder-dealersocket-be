@@ -60,7 +60,7 @@ export class RecordsService {
     if (query.sortBy) {
       sort[query.sortBy] = query.sortOrder === 'asc' ? 1 : -1;
     } else {
-      sort.createdAt = -1;
+      sort.createdAt = 1;
     }
 
     const page = Math.max(1, Number(query.page) || 1);

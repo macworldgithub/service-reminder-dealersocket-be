@@ -87,74 +87,7 @@ export class ImportsService {
     }
 
     // Auto-map detected headers to internal target fields
-    const suggestedMappings: ColumnMappingDefinition[] = detectedHeaders.map((header) => {
-      const norm = normalizeHeader(header);
-      let targetField = '';
-      let dataType: 'string' | 'number' | 'currency' | 'date' | 'boolean' = 'string';
-      let transformation: 'none' | 'trim' | 'uppercase' | 'lowercase' | 'parse_currency' | 'parse_date' = 'none';
-
-      // Sample column values to detect types
-      const samples = rawRows.slice(0, 30).map((r) => r[header]);
-      const autoType = detectDataType(samples);
-
-      if (norm.includes('entity') || norm === 'entity_id' || norm === 'id') {
-        targetField = 'externalEntityId';
-        dataType = 'string';
-      } else if (norm.includes('customer') || norm === 'name' || norm === 'client') {
-        targetField = 'customerName';
-        dataType = 'string';
-      } else if (norm.includes('email') || norm === 'e_mail' || norm === 'mail') {
-        targetField = 'customerEmail';
-        dataType = 'string';
-      } else if (norm.includes('phone') || norm.includes('mobile') || norm.includes('cell')) {
-        targetField = 'customerPhone';
-        dataType = 'string';
-      } else if (norm === 'year' || norm.includes('model_year')) {
-        targetField = 'vehicle.year';
-        dataType = 'number';
-      } else if (norm.includes('make_model') || norm === 'make_model') {
-        targetField = 'vehicle.model';
-        dataType = 'string';
-      } else if (norm === 'make') {
-        targetField = 'vehicle.make';
-        dataType = 'string';
-      } else if (norm === 'model') {
-        targetField = 'vehicle.model';
-        dataType = 'string';
-      } else if (norm === 'campaign' || norm.includes('campaign_name')) {
-        targetField = 'campaignName';
-        dataType = 'string';
-      } else if (norm === 'insert' || norm.includes('insert') || norm.includes('insert_date')) {
-        targetField = 'campaignInsertDate';
-        dataType = 'date';
-        transformation = 'parse_date';
-      } else if (norm.includes('event') || norm === 'event_no' || norm === 'event_id') {
-        targetField = 'eventNumber';
-        dataType = 'string';
-      } else if (norm.includes('close_date') || norm === 'closed_date') {
-        targetField = 'closeDate';
-        dataType = 'date';
-        transformation = 'parse_date';
-      } else if (norm.includes('ro_amount') || norm.includes('amount') || norm.includes('total')) {
-        targetField = 'roAmount';
-        dataType = 'currency';
-        transformation = 'parse_currency';
-      } else if (norm === 'n_u' || norm === 'nu') {
-        targetField = 'nOrU';
-        dataType = 'string';
-      } else {
-        targetField = `custom_${norm}`;
-        dataType = autoType;
-      }
-
-      return {
-        sourceColumn: header,
-        targetField,
-        dataType,
-        transformation,
-        isRequired: false,
-      };
-    });
+    const suggestedMappings = this.generateDefaultMappings(detectedHeaders, rawRows);
 
     // Detect duplicate entity IDs or event numbers in source rows
     const entityMap = new Map<string, number>();
@@ -399,7 +332,27 @@ export class ImportsService {
       }
     }
 
-    // 2. Create Report document
+    // 2. Infer date range if not explicitly provided
+    let finalDateFrom = reportDateFrom ? new Date(reportDateFrom) : undefined;
+    let finalDateTo = reportDateTo ? new Date(reportDateTo) : undefined;
+    if (!finalDateFrom || !finalDateTo) {
+      const dates = rawRows
+        .map((r) => {
+          const val =
+            this.extractMappedValue(r, columnMappings, 'closeDate') ||
+            this.extractMappedValue(r, columnMappings, 'campaignInsertDate');
+          return val ? new Date(val) : null;
+        })
+        .filter((d): d is Date => d !== null && !isNaN(d.getTime()))
+        .sort((a, b) => a.getTime() - b.getTime());
+
+      if (dates.length > 0) {
+        if (!finalDateFrom) finalDateFrom = dates[0];
+        if (!finalDateTo) finalDateTo = dates[dates.length - 1];
+      }
+    }
+
+    // Create Report document
     const reportDoc = await this.reportModel.create({
       dealershipId: new Types.ObjectId(dealershipId),
       uploadedBy: new Types.ObjectId(userId),
@@ -409,8 +362,8 @@ export class ImportsService {
       sourceFileSize: importDoc.fileSize,
       campaignName: campaignName || 'HY Closed RO',
       reportType: 'DealerSocket Closed RO',
-      reportDateFrom: reportDateFrom ? new Date(reportDateFrom) : undefined,
-      reportDateTo: reportDateTo ? new Date(reportDateTo) : undefined,
+      reportDateFrom: finalDateFrom,
+      reportDateTo: finalDateTo,
       recordCount: rawRows.length,
       status: 'IMPORTED',
       columnMappings,
@@ -600,6 +553,281 @@ export class ImportsService {
         total,
         totalPages: Math.ceil(total / limit),
       },
+    };
+  }
+
+  generateDefaultMappings(detectedHeaders: string[], rawRows: Record<string, any>[]): ColumnMappingDefinition[] {
+    return detectedHeaders.map((header) => {
+      const norm = normalizeHeader(header);
+      let targetField = '';
+      let dataType: 'string' | 'number' | 'currency' | 'date' | 'boolean' = 'string';
+      let transformation: 'none' | 'trim' | 'uppercase' | 'lowercase' | 'parse_currency' | 'parse_date' = 'none';
+
+      const samples = rawRows.slice(0, 30).map((r) => r[header]);
+      const autoType = detectDataType(samples);
+
+      if (norm.includes('entity') || norm === 'entity_id' || norm === 'id') {
+        targetField = 'externalEntityId';
+        dataType = 'string';
+      } else if (norm.includes('customer') || norm === 'name' || norm === 'client') {
+        targetField = 'customerName';
+        dataType = 'string';
+      } else if (norm.includes('email') || norm === 'e_mail' || norm === 'mail') {
+        targetField = 'customerEmail';
+        dataType = 'string';
+      } else if (norm.includes('phone') || norm.includes('mobile') || norm.includes('cell')) {
+        targetField = 'customerPhone';
+        dataType = 'string';
+      } else if (norm === 'year' || norm.includes('model_year')) {
+        targetField = 'vehicle.year';
+        dataType = 'number';
+      } else if (norm.includes('make_model') || norm === 'make_model') {
+        targetField = 'vehicle.model';
+        dataType = 'string';
+      } else if (norm === 'make') {
+        targetField = 'vehicle.make';
+        dataType = 'string';
+      } else if (norm === 'model') {
+        targetField = 'vehicle.model';
+        dataType = 'string';
+      } else if (norm === 'campaign' || norm.includes('campaign_name')) {
+        targetField = 'campaignName';
+        dataType = 'string';
+      } else if (norm === 'insert' || norm.includes('insert') || norm.includes('insert_date')) {
+        targetField = 'campaignInsertDate';
+        dataType = 'date';
+        transformation = 'parse_date';
+      } else if (norm.includes('event') || norm === 'event_no' || norm === 'event_id') {
+        targetField = 'eventNumber';
+        dataType = 'string';
+      } else if (norm.includes('close_date') || norm === 'closed_date') {
+        targetField = 'closeDate';
+        dataType = 'date';
+        transformation = 'parse_date';
+      } else if (norm.includes('ro_amount') || norm.includes('amount') || norm.includes('total')) {
+        targetField = 'roAmount';
+        dataType = 'currency';
+        transformation = 'parse_currency';
+      } else if (norm === 'n_u' || norm === 'nu') {
+        targetField = 'nOrU';
+        dataType = 'string';
+      } else {
+        targetField = `custom_${norm}`;
+        dataType = autoType;
+      }
+
+      return {
+        sourceColumn: header,
+        targetField,
+        dataType,
+        transformation,
+        isRequired: false,
+      };
+    });
+  }
+
+  async processBatchFiles(params: {
+    files: Express.Multer.File[];
+    dealershipId: string;
+    userId: string;
+    campaignName?: string;
+  }) {
+    const { files, dealershipId, userId, campaignName } = params;
+    const successful: any[] = [];
+    const failed: any[] = [];
+
+    for (const file of files) {
+      try {
+        const ext = file.originalname.split('.').pop()?.toLowerCase();
+        let detectedHeaders: string[] = [];
+        let rawRows: Record<string, any>[] = [];
+        let detectedMetadata: any = {};
+
+        if (ext === 'pdf') {
+          const parsed = await PdfParser.parse(file.buffer);
+          detectedHeaders = parsed.headers;
+          rawRows = parsed.rows;
+          detectedMetadata = parsed.metadata || {};
+        } else if (ext === 'csv') {
+          const parsed = CsvParser.parse(file.buffer);
+          detectedHeaders = parsed.headers;
+          rawRows = parsed.rows;
+        } else if (ext === 'xlsx' || ext === 'xls') {
+          const parsed = XlsxParser.parse(file.buffer);
+          detectedHeaders = parsed.headers;
+          rawRows = parsed.rows;
+        } else {
+          throw new BadRequestException(`Unsupported file format: .${ext}`);
+        }
+
+        if (rawRows.length === 0) {
+          throw new BadRequestException('No records detected in document');
+        }
+
+        const columnMappings = this.generateDefaultMappings(detectedHeaders, rawRows);
+
+        // Build distinct date label to disambiguate reports with identical names
+        let dateFrom = detectedMetadata.reportDateFrom;
+        let dateTo = detectedMetadata.reportDateTo;
+        let dateRangeLabel = detectedMetadata.reportDateRange;
+
+        if (!dateFrom || !dateTo) {
+          const rowDates = rawRows
+            .map((r) => r['Close Date'] || r['close_date'] || r['closeDate'] || r['Campaign Insert'])
+            .filter(Boolean)
+            .map((d) => new Date(d))
+            .filter((d) => !isNaN(d.getTime()))
+            .sort((a, b) => a.getTime() - b.getTime());
+
+          if (rowDates.length > 0) {
+            if (!dateFrom) dateFrom = rowDates[0];
+            if (!dateTo) dateTo = rowDates[rowDates.length - 1];
+          }
+        }
+
+        if (!dateRangeLabel && dateFrom && dateTo) {
+          const fStr = new Date(dateFrom).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+          const tStr = new Date(dateTo).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+          dateRangeLabel = `${fStr} - ${tStr}`;
+        }
+
+        const baseTitle = detectedMetadata.campaignName || campaignName || file.originalname.replace(/\.[^/.]+$/, '');
+        const reportName = dateRangeLabel
+          ? `${baseTitle} (${dateRangeLabel})`
+          : `${baseTitle} (${new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })})`;
+
+        const importDoc = await this.importModel.create({
+          dealershipId: new Types.ObjectId(dealershipId),
+          uploadedBy: new Types.ObjectId(userId),
+          fileName: file.originalname,
+          fileType: ext,
+          fileSize: file.size,
+          detectedHeaders,
+          totalRows: rawRows.length,
+          status: 'COMPLETED',
+          completedAt: new Date(),
+        });
+
+        const reportDoc = await this.reportModel.create({
+          dealershipId: new Types.ObjectId(dealershipId),
+          uploadedBy: new Types.ObjectId(userId),
+          name: reportName,
+          sourceFileName: file.originalname,
+          sourceFileType: ext,
+          sourceFileSize: file.size,
+          campaignName: detectedMetadata.campaignName || campaignName || 'HY Closed RO',
+          reportType: 'DealerSocket Closed RO',
+          reportDateFrom: dateFrom ? new Date(dateFrom) : undefined,
+          reportDateTo: dateTo ? new Date(dateTo) : undefined,
+          recordCount: rawRows.length,
+          status: 'IMPORTED',
+          columnMappings,
+          originalHeaders: detectedHeaders,
+          normalizedHeaders: detectedHeaders.map((h) => normalizeHeader(h)),
+          importId: importDoc._id,
+          version: 1,
+        });
+
+        const recordsToInsert: any[] = [];
+        rawRows.forEach((rawRow) => {
+          const record: any = {
+            reportId: reportDoc._id,
+            dealershipId: new Types.ObjectId(dealershipId),
+            vehicle: {},
+            customFields: {},
+            sourceData: rawRow,
+            recordStatus: 'VALID',
+            validationNotes: [],
+          };
+
+          for (const m of columnMappings) {
+            const rawVal = rawRow[m.sourceColumn];
+            const transformed = applyTransformation(rawVal, m.dataType, m.transformation);
+
+            if (m.targetField === 'externalEntityId') {
+              record.externalEntityId = transformed ? String(transformed) : undefined;
+            } else if (m.targetField === 'customerName') {
+              record.customerName = transformed ? String(transformed) : undefined;
+            } else if (m.targetField === 'customerEmail') {
+              record.customerEmail = transformed ? String(transformed).toLowerCase().trim() : undefined;
+            } else if (m.targetField === 'customerPhone') {
+              record.customerPhone = transformed ? String(transformed).trim() : undefined;
+            } else if (m.targetField === 'vehicle.year') {
+              record.vehicle.year = transformed ? Number(transformed) : undefined;
+            } else if (m.targetField === 'vehicle.make') {
+              record.vehicle.make = transformed ? String(transformed) : undefined;
+            } else if (m.targetField === 'vehicle.model') {
+              record.vehicle.model = transformed ? String(transformed) : undefined;
+            } else if (m.targetField === 'campaignName') {
+              record.campaignName = transformed ? String(transformed) : undefined;
+            } else if (m.targetField === 'campaignInsertDate') {
+              record.campaignInsertDate = transformed;
+            } else if (m.targetField === 'eventNumber') {
+              record.eventNumber = transformed ? String(transformed) : undefined;
+            } else if (m.targetField === 'closeDate') {
+              record.closeDate = transformed;
+            } else if (m.targetField === 'roAmount') {
+              record.roAmount = transformed !== null ? Number(transformed) : undefined;
+            } else if (m.targetField === 'nOrU') {
+              record.nOrU = transformed ? String(transformed) : undefined;
+            } else if (m.targetField.startsWith('custom_')) {
+              record.customFields[m.targetField.replace('custom_', '')] = transformed;
+            } else {
+              record.customFields[m.targetField] = transformed;
+            }
+          }
+
+          if (record.closeDate && isNaN(new Date(record.closeDate).getTime())) {
+            record.recordStatus = 'WARNING';
+            record.validationNotes.push('Invalid Close Date');
+          }
+          if (record.roAmount !== undefined && (isNaN(record.roAmount) || record.roAmount < 0)) {
+            record.recordStatus = 'WARNING';
+            record.validationNotes.push('Invalid RO Amount');
+          }
+
+          recordsToInsert.push(record);
+        });
+
+        await this.reportRecordModel.insertMany(recordsToInsert, { ordered: true });
+
+        await this.auditService.log({
+          dealershipId,
+          userId,
+          action: 'REPORT_UPLOADED',
+          entityType: 'Report',
+          entityId: reportDoc._id.toString(),
+          after: {
+            reportName,
+            sourceFileName: file.originalname,
+            recordCount: recordsToInsert.length,
+            dateRange: dateRangeLabel,
+          },
+        });
+
+        successful.push({
+          reportId: reportDoc._id,
+          name: reportName,
+          sourceFileName: file.originalname,
+          recordCount: recordsToInsert.length,
+          reportDateFrom: dateFrom,
+          reportDateTo: dateTo,
+          dateRange: dateRangeLabel,
+          status: 'IMPORTED',
+        });
+      } catch (err: any) {
+        failed.push({
+          fileName: file.originalname,
+          error: err.message || 'Processing failed',
+        });
+      }
+    }
+
+    return {
+      totalFiles: files.length,
+      successful,
+      failed,
+      totalRecordsIngested: successful.reduce((sum, s) => sum + s.recordCount, 0),
     };
   }
 

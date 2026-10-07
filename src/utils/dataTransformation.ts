@@ -20,24 +20,30 @@ export const parseDate = (val: any): Date | null => {
   if (val instanceof Date) return isNaN(val.getTime()) ? null : val;
   
   const str = String(val).trim();
-  // Try direct date parse
-  const d = new Date(str);
-  if (!isNaN(d.getTime())) return d;
 
   // Handle M/D/YYYY or D/M/YYYY or YYYY-MM-DD
   const parts = str.split(/[\/\-.]/);
   if (parts.length === 3) {
-    // Check if parts[2] is 4 digit year
     if (parts[2].length === 4) {
-      // MM/DD/YYYY or DD/MM/YYYY
+      // MM/DD/YYYY
       const mOrD = parseInt(parts[0], 10);
       const dOrM = parseInt(parts[1], 10);
       const y = parseInt(parts[2], 10);
-      // Assume US/DealerSocket standard MM/DD/YYYY if mOrD <= 12
-      const candidate = new Date(y, mOrD - 1, dOrM);
+      // Store at noon UTC so no timezone conversion shifts the date anywhere in the world
+      const candidate = new Date(Date.UTC(y, mOrD - 1, dOrM, 12, 0, 0));
+      if (!isNaN(candidate.getTime())) return candidate;
+    } else if (parts[0].length === 4) {
+      // YYYY-MM-DD
+      const y = parseInt(parts[0], 10);
+      const m = parseInt(parts[1], 10);
+      const d = parseInt(parts[2], 10);
+      const candidate = new Date(Date.UTC(y, m - 1, d, 12, 0, 0));
       if (!isNaN(candidate.getTime())) return candidate;
     }
   }
+
+  const d = new Date(str);
+  if (!isNaN(d.getTime())) return d;
 
   return null;
 };

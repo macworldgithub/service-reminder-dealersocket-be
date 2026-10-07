@@ -22,6 +22,8 @@ export class ReportsService {
     campaignName?: string;
     status?: string;
     search?: string;
+    dateFrom?: string;
+    dateTo?: string;
     page?: number;
     limit?: number;
   }) {
@@ -29,12 +31,52 @@ export class ReportsService {
     if (query.dealershipId) filter.dealershipId = new Types.ObjectId(query.dealershipId);
     if (query.campaignName) filter.campaignName = query.campaignName;
     if (query.status) filter.status = query.status;
+
+    if (query.dateFrom || query.dateTo) {
+      const fromDate = query.dateFrom ? new Date(query.dateFrom) : undefined;
+      const toDate = query.dateTo ? new Date(query.dateTo) : undefined;
+      if (toDate) toDate.setHours(23, 59, 59, 999);
+
+      const dateConditions: any[] = [];
+      if (fromDate && toDate) {
+        dateConditions.push(
+          {
+            reportDateFrom: { $lte: toDate },
+            reportDateTo: { $gte: fromDate },
+          },
+          {
+            createdAt: { $gte: fromDate, $lte: toDate },
+          }
+        );
+      } else if (fromDate) {
+        dateConditions.push(
+          { reportDateTo: { $gte: fromDate } },
+          { createdAt: { $gte: fromDate } }
+        );
+      } else if (toDate) {
+        dateConditions.push(
+          { reportDateFrom: { $lte: toDate } },
+          { createdAt: { $lte: toDate } }
+        );
+      }
+
+      if (dateConditions.length > 0) {
+        filter.$or = dateConditions;
+      }
+    }
+
     if (query.search) {
-      filter.$or = [
+      const searchCondition = [
         { name: { $regex: query.search, $options: 'i' } },
         { campaignName: { $regex: query.search, $options: 'i' } },
         { sourceFileName: { $regex: query.search, $options: 'i' } },
       ];
+      if (filter.$or) {
+        filter.$and = [{ $or: filter.$or }, { $or: searchCondition }];
+        delete filter.$or;
+      } else {
+        filter.$or = searchCondition;
+      }
     }
 
     const page = Math.max(1, Number(query.page) || 1);
