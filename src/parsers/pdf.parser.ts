@@ -55,6 +55,13 @@ export class PdfParser {
     let headerY: number | null = null;
     let detectedHeaders: string[] = [];
 
+    const cleanText = (s: string) =>
+      (s || '')
+        .replace(/\u00a0/g, ' ')
+        .replace(/­/g, '-')
+        .replace(/\s+/g, ' ')
+        .trim();
+
     // Step 1: Scan for Metadata and Table Header Row using item coordinates
     for (const page of pagesData) {
       const lineMap = new Map<number, any[]>();
@@ -79,16 +86,16 @@ export class PdfParser {
       for (const y of sortedYs) {
         const lineItems = lineMap.get(y)!.sort((a, b) => a.transform[4] - b.transform[4]);
         const lineText = lineItems
-          .map((i) => i.str.replace(/\u00a0/g, ' ').trim())
+          .map((i) => cleanText(i.str))
           .filter(Boolean)
           .join(' ');
 
         if (/Campaign\s*Name:\s*/i.test(lineText)) {
-          metadata.campaignName = lineText.replace(/.*Campaign\s*Name:\s*/i, '').trim();
+          metadata.campaignName = cleanText(lineText.replace(/.*Campaign\s*Name:\s*/i, ''));
         }
         if (/Report\s*Date:\s*/i.test(lineText)) {
-          const m = lineText.match(/Report\s*Date:\s*([^\s]+(?:\s*[-–—­]\s*[^\s]+)?)/i);
-          if (m) metadata.reportDateRange = m[1].replace(/­/g, '-').trim();
+          const m = lineText.match(/Report\s*Date:\s*([^\s]+(?:\s*[-–—]\s*[^\s]+)?)/i);
+          if (m) metadata.reportDateRange = cleanText(m[1]);
         }
         if (/Record\s*Count:\s*(\d+)/i.test(lineText)) {
           const m = lineText.match(/Record\s*Count:\s*(\d+)/i);
@@ -106,7 +113,7 @@ export class PdfParser {
           headerY = y;
           const rawCols = lineItems
             .map((i) => ({
-              str: i.str.replace(/\u00a0/g, ' ').trim(),
+              str: cleanText(i.str),
               x: i.transform[4],
               w: i.width,
               right: i.transform[4] + i.width,
@@ -132,13 +139,25 @@ export class PdfParser {
 
     const dataRows: Record<string, any>[] = [];
 
-    // Step 2: Coordinate-based row extraction if table headers were identified
+    // Step 2: Coordinate & token-type based row extraction
     if (headerColumns.length > 0) {
-      const columnRanges = headerColumns.map((c, i) => {
-        const left = i === 0 ? 0 : (headerColumns[i - 1].right + c.x) / 2;
-        const right = i === headerColumns.length - 1 ? 99999 : (c.right + headerColumns[i + 1].x) / 2;
-        return { name: c.str, left, right };
-      });
+      // Find start of customer name column and insert/event columns from header
+      const entityCol = headerColumns.find((h) => /entity/i.test(h.str));
+      const customerCol = headerColumns.find((h) => /customer/i.test(h.str));
+      const nuCol = headerColumns.find((h) => /n\/u/i.test(h.str));
+      const insertCol = headerColumns.find((h) => /insert/i.test(h.str));
+      const eventCol = headerColumns.find((h) => /event/i.test(h.str));
+      const closeCol = headerColumns.find((h) => /close/i.test(h.str));
+      const amountCol = headerColumns.find((h) => /amount/i.test(h.str));
+
+      // Cutoff between Entity ID and Customer Name:
+      // Entity IDs always end before x=56. Customer Names always start at x>=56.
+      const entityMaxX = 56;
+      const nuStartX = nuCol ? nuCol.x - 10 : 220;
+      const insertStartX = insertCol ? insertCol.x - 20 : 330;
+      const eventStartX = eventCol ? eventCol.x - 15 : 410;
+      const closeStartX = closeCol ? closeCol.x - 15 : 450;
+      const amountStartX = amountCol ? amountCol.x - 15 : 520;
 
       for (const page of pagesData) {
         const lineMap = new Map<number, any[]>();
@@ -168,7 +187,7 @@ export class PdfParser {
 
           const lineItems = lineMap.get(y)!.sort((a, b) => a.transform[4] - b.transform[4]);
           const lineText = lineItems
-            .map((i) => i.str.replace(/\u00a0/g, ' ').trim())
+            .map((i) => cleanText(i.str))
             .filter(Boolean)
             .join(' ');
 
@@ -184,27 +203,79 @@ export class PdfParser {
             continue;
           }
 
-          const row: Record<string, any> = {};
-          headerColumns.forEach((h) => {
-            row[h.str] = '';
-          });
+          let entityId = '';
+          const customerNameParts: string[] = [];
+          let nu = '';
+          let year = '';
+          const makeModelParts: string[] = [];
+          let insertDate = '';
+          let eventNumber = '';
+          let closeDate = '';
+          let roAmount = '';
 
           for (const item of lineItems) {
-            const text = item.str.replace(/\u00a0/g, ' ').trim();
+            const text = cleanText(item.str);
             if (!text) continue;
-            const center = item.transform[4] + item.width / 2;
-            const col = columnRanges.find((r) => center >= r.left && center < r.right);
-            if (col) {
-              row[col.name] = (row[col.name] ? row[col.name] + ' ' + text : text).trim();
+            const x = item.transform[4];
+
+            // 1. Entity ID: left edge (x < entityMaxX) and numeric/alphanumeric
+            if (x < entityMaxX && /^\d+$/.test(text)) {
+              entityId = text;
+            }
+            // 2. Customer Name: between x=56 and N/U / insert date, non-date, non-currency
+            else if (
+              x >= entityMaxX &&
+              x < nuStartX &&
+              !/^\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}$/.test(text) &&
+              !text.startsWith('$')
+            ) {
+              customerNameParts.push(text);
+            }
+            // 3. N/U status: single char N or U between 200 and 280
+            else if (x >= 200 && x < 280 && (text === 'N' || text === 'U')) {
+              nu = text;
+            }
+            // 4. Vehicle Year: 4-digit year 19xx or 20xx
+            else if (x >= 230 && x < 320 && /^(19\d{2}|20\d{2})$/.test(text)) {
+              year = text;
+            }
+            // 5. Vehicle Make / Model
+            else if (x >= 260 && x < 350 && !/^\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}$/.test(text)) {
+              makeModelParts.push(text);
+            }
+            // 6. Campaign Insert Date
+            else if (x >= insertStartX && x < eventStartX && /^\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}$/.test(text)) {
+              insertDate = text;
+            }
+            // 7. Event#: 5-7 digits
+            else if (x >= eventStartX && x < closeStartX && /^\d{5,7}$/.test(text)) {
+              eventNumber = text;
+            }
+            // 8. Close Date
+            else if (x >= closeStartX && x < amountStartX && /^\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}$/.test(text)) {
+              closeDate = text;
+            }
+            // 9. RO Amount: currency
+            else if (x >= amountStartX && (text.startsWith('$') || /^\d+[\d,]*\.\d{2}$/.test(text))) {
+              roAmount = text;
             }
           }
 
-          // Verify row has minimal data (Entity ID and either Amount, Close Date, or Customer Name)
-          if (row['Entity ID'] && (row['RO Amount'] || row['Close Date'] || row['Customer Name'])) {
-            if (!row['Campaign'] && metadata.campaignName) {
-              row['Campaign'] = metadata.campaignName;
-            }
-            row['sourceData'] = { rawLine: lineText };
+          // Strict verification: require Entity ID and at least one other field (RO Amount, Close Date, or Customer Name)
+          if (entityId && (roAmount || closeDate || customerNameParts.length > 0)) {
+            const row: Record<string, any> = {
+              'Entity ID': entityId,
+              'Customer Name': customerNameParts.join(' ').trim(),
+              'N/U': nu,
+              'Year': year,
+              'Make/Model': makeModelParts.join(' ').trim(),
+              'Campaign Insert': insertDate,
+              'Event#': eventNumber,
+              'Close Date': closeDate,
+              'RO Amount': roAmount,
+              'Campaign': metadata.campaignName || 'HY Closed RO',
+              sourceData: { rawLine: lineText },
+            };
             dataRows.push(row);
           }
         }
@@ -216,7 +287,7 @@ export class PdfParser {
       warnings.push('Coordinate extraction not applicable, using enhanced line parser');
       const lines = rawText
         .split(/\r?\n/)
-        .map((l) => l.trim())
+        .map((l) => cleanText(l))
         .filter((l) => l.length > 0);
 
       const standardHeaders = [
@@ -244,13 +315,13 @@ export class PdfParser {
         }
 
         const currencyMatch = line.match(/\$?(\d+[\d,]*\.\d{2})$/);
-        // NOTE: Strictly match entity digits/ID, DO NOT consume the initial capital letter of customer name!
-        const entityMatch = line.match(/^(\d{3,}[A-Za-z]?|\b[A-Za-z0-9]{4,8}\b)/);
+        // Strictly match numeric entity digits/ID, NEVER consume letters of customer name
+        const entityMatch = line.match(/^(\d{2,8})\b/);
 
         if (currencyMatch && entityMatch) {
           const entityId = entityMatch[1];
           const roAmount = currencyMatch[0];
-          let remainder = line.substring(entityId.length, line.length - roAmount.length).trim();
+          const remainder = line.substring(entityId.length, line.length - roAmount.length).trim();
 
           const dateMatches = [...remainder.matchAll(/\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}/g)];
           let insertDate = '';
@@ -265,7 +336,7 @@ export class PdfParser {
           const eventMatch = remainder.match(/(?:EV-?|\b)(\d{5,7})\b/i);
           const eventNumber = eventMatch ? eventMatch[1] : '';
 
-          // Match customer name from start up to date or event or spaces
+          // Match customer name from start up to date or event
           let customerName = remainder;
           if (insertDate) {
             customerName = customerName.substring(0, customerName.indexOf(insertDate)).trim();

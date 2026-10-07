@@ -26,7 +26,7 @@ export class ReportsService {
     dateTo?: string;
     page?: number;
     limit?: number;
-  }) {
+  }): Promise<{ items: any[]; meta: any }> {
     const filter: any = {};
     if (query.dealershipId) filter.dealershipId = new Types.ObjectId(query.dealershipId);
     if (query.campaignName) filter.campaignName = query.campaignName;
@@ -95,13 +95,55 @@ export class ReportsService {
       this.reportModel.countDocuments(filter),
     ]);
 
+    // Attach totalRevenue and avgRoAmount to each report item
+    const reportIds = items.map((r) => r._id);
+    const revenueAggr = await this.reportRecordModel.aggregate([
+      { $match: { reportId: { $in: reportIds } } },
+      {
+        $group: {
+          _id: '$reportId',
+          totalRevenue: { $sum: '$roAmount' },
+          avgRoAmount: { $avg: '$roAmount' },
+        },
+      },
+    ]);
+
+    const revMap = new Map<string, { totalRevenue: number; avgRoAmount: number }>();
+    for (const r of revenueAggr) {
+      revMap.set(String(r._id), {
+        totalRevenue: Math.round((r.totalRevenue || 0) * 100) / 100,
+        avgRoAmount: Math.round((r.avgRoAmount || 0) * 100) / 100,
+      });
+    }
+
+    const enrichedItems = items.map((item) => ({
+      ...item,
+      totalRevenue: revMap.get(String(item._id))?.totalRevenue || 0,
+      avgRoAmount: revMap.get(String(item._id))?.avgRoAmount || 0,
+    }));
+
+    // Calculate total tracked revenue across all filtered reports
+    const allFilteredReportIds = await this.reportModel.find(filter).select('_id').lean();
+    const allIds = allFilteredReportIds.map((r) => r._id);
+    const overallRevenueAggr = await this.reportRecordModel.aggregate([
+      { $match: { reportId: { $in: allIds } } },
+      {
+        $group: {
+          _id: null,
+          totalRevenue: { $sum: '$roAmount' },
+        },
+      },
+    ]);
+    const totalTrackedRevenue = Math.round((overallRevenueAggr[0]?.totalRevenue || 0) * 100) / 100;
+
     return {
-      items,
+      items: enrichedItems,
       meta: {
         page,
         limit,
         total,
         totalPages: Math.ceil(total / limit),
+        totalTrackedRevenue,
       },
     };
   }
@@ -141,14 +183,130 @@ export class ReportsService {
       validRecords: totalValid,
       warningRecords: totalWarnings,
       errorRecords: totalErrors,
-      totalRoRevenue: roSum[0]?.totalAmount || 0,
-      avgRoAmount: roSum[0]?.avgAmount || 0,
+      totalRoRevenue: Math.round((roSum[0]?.totalAmount || 0) * 100) / 100,
+      avgRoAmount: Math.round((roSum[0]?.avgAmount || 0) * 100) / 100,
     };
 
     return {
       report,
       versions,
       stats,
+    };
+  }
+
+  async getRevenueLookup(id: string, query: { dateFrom?: string; dateTo?: string }): Promise<any> {
+    const report = await this.reportModel.findById(id).lean();
+    if (!report) throw new NotFoundException('Report not found');
+
+    const reportObjectId = new Types.ObjectId(id);
+
+    // 1. Overall stats for this report
+    const overallAgg = await this.reportRecordModel.aggregate([
+      { $match: { reportId: reportObjectId } },
+      {
+        $group: {
+          _id: null,
+          totalRevenue: { $sum: '$roAmount' },
+          totalRecords: { $sum: 1 },
+          minDate: { $min: '$closeDate' },
+          maxDate: { $max: '$closeDate' },
+          overallAvgRo: { $avg: '$roAmount' },
+        },
+      },
+    ]);
+
+    const totalRevenue = Math.round((overallAgg[0]?.totalRevenue || 0) * 100) / 100;
+    const totalRecords = overallAgg[0]?.totalRecords || 0;
+    const minCloseDate = overallAgg[0]?.minDate || null;
+    const maxCloseDate = overallAgg[0]?.maxDate || null;
+    const overallAvgRo = Math.round((overallAgg[0]?.overallAvgRo || 0) * 100) / 100;
+
+    // 2. Filtered stats
+    const matchFilter: any = { reportId: reportObjectId };
+    if (query.dateFrom || query.dateTo) {
+      matchFilter.closeDate = {};
+      if (query.dateFrom) {
+        matchFilter.closeDate.$gte = new Date(query.dateFrom);
+      }
+      if (query.dateTo) {
+        const toDate = new Date(query.dateTo);
+        toDate.setHours(23, 59, 59, 999);
+        matchFilter.closeDate.$lte = toDate;
+      }
+    }
+
+    const filteredAgg = await this.reportRecordModel.aggregate([
+      { $match: matchFilter },
+      {
+        $group: {
+          _id: null,
+          filteredRevenue: { $sum: '$roAmount' },
+          filteredCount: { $sum: 1 },
+          filteredAvgRoAmount: { $avg: '$roAmount' },
+          minRoAmount: { $min: '$roAmount' },
+          maxRoAmount: { $max: '$roAmount' },
+        },
+      },
+    ]);
+
+    const filteredRevenue = Math.round((filteredAgg[0]?.filteredRevenue || 0) * 100) / 100;
+    const filteredCount = filteredAgg[0]?.filteredCount || 0;
+    const filteredAvgRoAmount = Math.round((filteredAgg[0]?.filteredAvgRoAmount || 0) * 100) / 100;
+    const minRoAmount = filteredAgg[0]?.minRoAmount !== undefined ? Math.round(filteredAgg[0]?.minRoAmount * 100) / 100 : 0;
+    const maxRoAmount = filteredAgg[0]?.maxRoAmount !== undefined ? Math.round(filteredAgg[0]?.maxRoAmount * 100) / 100 : 0;
+    const percentageOfTotal =
+      totalRevenue > 0 ? Math.round((filteredRevenue / totalRevenue) * 10000) / 100 : 0;
+
+    // 3. Monthly Breakdown across this report
+    const monthlyAgg = await this.reportRecordModel.aggregate([
+      { $match: { reportId: reportObjectId, closeDate: { $exists: true, $ne: null } } },
+      {
+        $group: {
+          _id: {
+            year: { $year: '$closeDate' },
+            month: { $month: '$closeDate' },
+          },
+          revenue: { $sum: '$roAmount' },
+          count: { $sum: 1 },
+          avgRo: { $avg: '$roAmount' },
+        },
+      },
+      {
+        $sort: { '_id.year': 1, '_id.month': 1 },
+      },
+    ]);
+
+    const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const monthlyBreakdown = monthlyAgg.map((m) => {
+      const year = m._id.year;
+      const month = m._id.month;
+      const monthKey = `${year}-${String(month).padStart(2, '0')}`;
+      const label = `${monthNames[month - 1]} ${year}`;
+      return {
+        month: monthKey,
+        label,
+        year,
+        revenue: Math.round((m.revenue || 0) * 100) / 100,
+        count: m.count,
+        avgRo: Math.round((m.avgRo || 0) * 100) / 100,
+      };
+    });
+
+    return {
+      reportId: id,
+      reportName: report.name,
+      totalRevenue,
+      totalRecords,
+      overallAvgRo,
+      filteredRevenue,
+      filteredCount,
+      filteredAvgRoAmount,
+      percentageOfTotal,
+      minCloseDate,
+      maxCloseDate,
+      minRoAmount,
+      maxRoAmount,
+      monthlyBreakdown,
     };
   }
 

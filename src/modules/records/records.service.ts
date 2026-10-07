@@ -67,7 +67,7 @@ export class RecordsService {
     const limit = Math.min(200, Math.max(1, Number(query.limit) || 25));
     const skip = (page - 1) * limit;
 
-    const [items, total] = await Promise.all([
+    const [items, total, revenueAgg] = await Promise.all([
       this.recordModel
         .find(filter)
         .sort(sort)
@@ -76,7 +76,20 @@ export class RecordsService {
         .populate('lastEditedBy', 'name email')
         .lean(),
       this.recordModel.countDocuments(filter),
+      this.recordModel.aggregate([
+        { $match: filter },
+        {
+          $group: {
+            _id: null,
+            totalRevenue: { $sum: '$roAmount' },
+            avgRoAmount: { $avg: '$roAmount' },
+          },
+        },
+      ]),
     ]);
+
+    const filteredRevenue = Math.round((revenueAgg[0]?.totalRevenue || 0) * 100) / 100;
+    const filteredAvgRo = Math.round((revenueAgg[0]?.avgRoAmount || 0) * 100) / 100;
 
     return {
       items,
@@ -85,6 +98,8 @@ export class RecordsService {
         limit,
         total,
         totalPages: Math.ceil(total / limit),
+        filteredRevenue,
+        filteredAvgRo,
       },
     };
   }

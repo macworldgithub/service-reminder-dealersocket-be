@@ -32,7 +32,7 @@ export class ReportsController {
     @Query('dateTo') dateTo?: string,
     @Query('page') page?: number,
     @Query('limit') limit?: number
-  ) {
+  ): Promise<{ success: boolean; data: any[]; meta: any }> {
     const result = await this.reportsService.findAll({
       dealershipId,
       campaignName,
@@ -53,6 +53,19 @@ export class ReportsController {
   @Get(':id')
   async findById(@Param('id') id: string) {
     const result = await this.reportsService.findById(id);
+    return {
+      success: true,
+      data: result,
+    };
+  }
+
+  @Get(':id/revenue-lookup')
+  async getRevenueLookup(
+    @Param('id') id: string,
+    @Query('dateFrom') dateFrom?: string,
+    @Query('dateTo') dateTo?: string
+  ): Promise<{ success: boolean; data: any }> {
+    const result = await this.reportsService.getRevenueLookup(id, { dateFrom, dateTo });
     return {
       success: true,
       data: result,
