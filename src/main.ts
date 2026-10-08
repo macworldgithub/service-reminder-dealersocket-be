@@ -22,13 +22,18 @@ async function bootstrap() {
   app.use(cookieMiddleware());
 
   app.enableCors({
-    origin: [
-      'http://localhost:7001',
-      'http://127.0.0.1:7001',
-      'http://localhost:3000',
-      'http://127.0.0.1:3000',
-      ENV.FRONTEND_URL,
-    ],
+    origin: (origin, callback) => {
+      if (!origin) return callback(null, true);
+      if (
+        origin.includes('localhost') ||
+        origin.includes('127.0.0.1') ||
+        origin.endsWith('.vercel.app') ||
+        (ENV.FRONTEND_URL && origin.startsWith(ENV.FRONTEND_URL.replace(/\/$/, '')))
+      ) {
+        return callback(null, true);
+      }
+      return callback(null, true);
+    },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
@@ -48,4 +53,9 @@ async function bootstrap() {
   console.log(`[NestJS Server] Running on http://localhost:${ENV.PORT}/api`);
 }
 
-bootstrap();
+// Only listen if not running in Vercel serverless environment
+if (process.env.VERCEL !== '1' && !process.env.AWS_LAMBDA_FUNCTION_NAME) {
+  bootstrap();
+}
+
+export default bootstrap;
