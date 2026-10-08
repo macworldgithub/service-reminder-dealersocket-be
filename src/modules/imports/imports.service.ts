@@ -7,7 +7,7 @@ import { IReportRecord } from '../../models/ReportRecord.model';
 import { IColumnMapping } from '../../models/ColumnMapping.model';
 import { CsvParser } from '../../parsers/csv.parser';
 import { XlsxParser } from '../../parsers/xlsx.parser';
-import { PdfParser } from '../../parsers/pdf.parser';
+import { PdfParser, parseUtcDateString } from '../../parsers/pdf.parser';
 import { AuditService } from '../audit/audit.service';
 import {
   normalizeHeader,
@@ -333,8 +333,8 @@ export class ImportsService {
     }
 
     // 2. Infer date range if not explicitly provided
-    let finalDateFrom = reportDateFrom ? new Date(reportDateFrom) : undefined;
-    let finalDateTo = reportDateTo ? new Date(reportDateTo) : undefined;
+    let finalDateFrom = reportDateFrom ? (parseUtcDateString(reportDateFrom, false) || new Date(reportDateFrom)) : undefined;
+    let finalDateTo = reportDateTo ? (parseUtcDateString(reportDateTo, true) || new Date(reportDateTo)) : undefined;
     if (!finalDateFrom || !finalDateTo) {
       const dates = rawRows
         .map((r) => {

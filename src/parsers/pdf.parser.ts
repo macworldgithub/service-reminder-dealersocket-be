@@ -1,4 +1,25 @@
 const pdf = require('pdf-parse');
+export function parseUtcDateString(str?: string, endOfDay = false): Date | null {
+  if (!str) return null;
+  const trimmed = str.trim();
+  const mdy = trimmed.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
+  if (mdy) {
+    const month = parseInt(mdy[1], 10) - 1;
+    const day = parseInt(mdy[2], 10);
+    const year = parseInt(mdy[3], 10);
+    return new Date(Date.UTC(year, month, day, endOfDay ? 23 : 0, endOfDay ? 59 : 0, endOfDay ? 59 : 0, endOfDay ? 999 : 0));
+  }
+  const ymd = trimmed.match(/^(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})$/);
+  if (ymd) {
+    const year = parseInt(ymd[1], 10);
+    const month = parseInt(ymd[2], 10) - 1;
+    const day = parseInt(ymd[3], 10);
+    return new Date(Date.UTC(year, month, day, endOfDay ? 23 : 0, endOfDay ? 59 : 0, endOfDay ? 59 : 0, endOfDay ? 999 : 0));
+  }
+  const d = new Date(trimmed);
+  if (isNaN(d.getTime())) return null;
+  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), endOfDay ? 23 : 0, endOfDay ? 59 : 0, endOfDay ? 59 : 0, endOfDay ? 999 : 0));
+}
 
 export interface PdfMetadata {
   reportTitle?: string;
@@ -130,10 +151,10 @@ export class PdfParser {
     if (metadata.reportDateRange) {
       const dateParts = metadata.reportDateRange.split(/\s*[-–—]\s*|\s+to\s+/i);
       if (dateParts.length === 2) {
-        const dFrom = new Date(dateParts[0].trim());
-        const dTo = new Date(dateParts[1].trim());
-        if (!isNaN(dFrom.getTime())) metadata.reportDateFrom = dFrom;
-        if (!isNaN(dTo.getTime())) metadata.reportDateTo = dTo;
+        const dFrom = parseUtcDateString(dateParts[0], false);
+        const dTo = parseUtcDateString(dateParts[1], true);
+        if (dFrom) metadata.reportDateFrom = dFrom;
+        if (dTo) metadata.reportDateTo = dTo;
       }
     }
 

@@ -8,6 +8,26 @@ import { ITemplate } from '../../models/Template.model';
 import { AuditService } from '../audit/audit.service';
 import { PdfGenerator } from '../../parsers/pdf.generator';
 
+function parseUtcStartOfDay(dateStr: string): Date {
+  const parts = dateStr.split('-');
+  if (parts.length === 3) {
+    return new Date(Date.UTC(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]), 0, 0, 0, 0));
+  }
+  const d = new Date(dateStr);
+  d.setUTCHours(0, 0, 0, 0);
+  return d;
+}
+
+function parseUtcEndOfDay(dateStr: string): Date {
+  const parts = dateStr.split('-');
+  if (parts.length === 3) {
+    return new Date(Date.UTC(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]), 23, 59, 59, 999));
+  }
+  const d = new Date(dateStr);
+  d.setUTCHours(23, 59, 59, 999);
+  return d;
+}
+
 @Injectable()
 export class ReportsService {
   constructor(
@@ -33,36 +53,54 @@ export class ReportsService {
     if (query.status) filter.status = query.status;
 
     if (query.dateFrom || query.dateTo) {
-      const fromDate = query.dateFrom ? new Date(query.dateFrom) : undefined;
-      const toDate = query.dateTo ? new Date(query.dateTo) : undefined;
-      if (fromDate) fromDate.setHours(0, 0, 0, 0);
-      if (toDate) toDate.setHours(23, 59, 59, 999);
+      const fromDate = query.dateFrom ? parseUtcStartOfDay(query.dateFrom) : undefined;
+      const toDate = query.dateTo ? parseUtcEndOfDay(query.dateTo) : undefined;
+      const isSingleDay = Boolean(query.dateFrom && query.dateTo && query.dateFrom === query.dateTo);
 
-      const dateConditions: any[] = [];
       if (fromDate && toDate) {
-        dateConditions.push(
-          {
-            reportDateFrom: { $lte: toDate },
-            reportDateTo: { $gte: fromDate },
-          },
-          {
-            createdAt: { $gte: fromDate, $lte: toDate },
-          }
-        );
+        if (isSingleDay) {
+          // For single day presets (e.g. Today or Yesterday):
+          // Match if coverage period includes that day, or if uploaded on that day
+          filter.$or = [
+            {
+              reportDateFrom: { $lte: toDate },
+              reportDateTo: { $gte: fromDate },
+            },
+            {
+              createdAt: { $gte: fromDate, $lte: toDate },
+            },
+          ];
+        } else {
+          // For macro periods (Quarters, Years, date spans):
+          // Match reports whose service coverage period falls in this range.
+          // Only fallback to createdAt if report has no coverage period specified.
+          filter.$or = [
+            {
+              reportDateFrom: { $lte: toDate },
+              reportDateTo: { $gte: fromDate },
+            },
+            {
+              reportDateFrom: { $exists: false },
+              createdAt: { $gte: fromDate, $lte: toDate },
+            },
+            {
+              reportDateFrom: null,
+              createdAt: { $gte: fromDate, $lte: toDate },
+            },
+          ];
+        }
       } else if (fromDate) {
-        dateConditions.push(
+        filter.$or = [
           { reportDateTo: { $gte: fromDate } },
-          { createdAt: { $gte: fromDate } }
-        );
+          { reportDateTo: { $exists: false }, createdAt: { $gte: fromDate } },
+          { reportDateTo: null, createdAt: { $gte: fromDate } },
+        ];
       } else if (toDate) {
-        dateConditions.push(
+        filter.$or = [
           { reportDateFrom: { $lte: toDate } },
-          { createdAt: { $lte: toDate } }
-        );
-      }
-
-      if (dateConditions.length > 0) {
-        filter.$or = dateConditions;
+          { reportDateFrom: { $exists: false }, createdAt: { $lte: toDate } },
+          { reportDateFrom: null, createdAt: { $lte: toDate } },
+        ];
       }
     }
 
@@ -227,12 +265,10 @@ export class ReportsService {
     if (query.dateFrom || query.dateTo) {
       matchFilter.closeDate = {};
       if (query.dateFrom) {
-        matchFilter.closeDate.$gte = new Date(query.dateFrom);
+        matchFilter.closeDate.$gte = parseUtcStartOfDay(query.dateFrom);
       }
       if (query.dateTo) {
-        const toDate = new Date(query.dateTo);
-        toDate.setHours(23, 59, 59, 999);
-        matchFilter.closeDate.$lte = toDate;
+        matchFilter.closeDate.$lte = parseUtcEndOfDay(query.dateTo);
       }
     }
 
@@ -405,11 +441,9 @@ export class ReportsService {
     const filter: any = { reportId: new Types.ObjectId(id) };
     if (dateFrom || dateTo) {
       filter.closeDate = {};
-      if (dateFrom) filter.closeDate.$gte = new Date(dateFrom);
+      if (dateFrom) filter.closeDate.$gte = parseUtcStartOfDay(dateFrom);
       if (dateTo) {
-        const toDate = new Date(dateTo);
-        toDate.setHours(23, 59, 59, 999);
-        filter.closeDate.$lte = toDate;
+        filter.closeDate.$lte = parseUtcEndOfDay(dateTo);
       }
     }
 
