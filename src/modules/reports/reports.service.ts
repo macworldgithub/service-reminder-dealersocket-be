@@ -35,6 +35,7 @@ export class ReportsService {
     if (query.dateFrom || query.dateTo) {
       const fromDate = query.dateFrom ? new Date(query.dateFrom) : undefined;
       const toDate = query.dateTo ? new Date(query.dateTo) : undefined;
+      if (fromDate) fromDate.setHours(0, 0, 0, 0);
       if (toDate) toDate.setHours(23, 59, 59, 999);
 
       const dateConditions: any[] = [];
