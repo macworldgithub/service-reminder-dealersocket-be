@@ -12,6 +12,7 @@ export interface IDealership extends Document {
     defaultReportType?: string;
     duplicateDetectionKeys?: string[];
     allowedFileTypes?: string[];
+    webhookApiKey?: string;
   };
   createdAt: Date;
   updatedAt: Date;

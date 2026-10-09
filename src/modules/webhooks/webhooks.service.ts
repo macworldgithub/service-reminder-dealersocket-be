@@ -25,6 +25,15 @@ import {
 
 export const DEFAULT_WEBHOOK_API_KEY = 'ds_live_sk_9a8f27c3e104b46298fa';
 
+export const STORE_API_KEYS: Record<string, string> = {
+  'BMG-01': 'ds_live_sk_bmg_4b2e81a9c3d0f51728ea',
+  'CBH-01': 'ds_live_sk_cbh_7d3a91e5f2b8c40619db',
+  'DNM-01': 'ds_live_sk_dnm_6c1f80d4e9a7b39508ca',
+  'SMH-01': 'ds_live_sk_9a8f27c3e104b46298fa',
+  'SMK-01': 'ds_live_sk_smk_5a0e79c3d8f6a28497b9',
+  'SKI-01': 'ds_live_sk_ski_3e9d68b2c7e5f17386a8',
+};
+
 @Injectable()
 export class WebhooksService {
   constructor(
@@ -38,9 +47,44 @@ export class WebhooksService {
   ) {}
 
   /**
-   * Validate incoming API key or Bearer token
+   * Resolve dealership from store identifier (ObjectId, code, or name)
    */
-  async authenticateKey(apiKey?: string): Promise<IDealership> {
+  async resolveDealership(storeIdentifier?: string): Promise<IDealership | null> {
+    if (!storeIdentifier) return null;
+    const clean = storeIdentifier.trim();
+    if (!clean) return null;
+
+    if (Types.ObjectId.isValid(clean)) {
+      const found = await this.dealershipModel.findById(clean).lean();
+      if (found) return found as unknown as IDealership;
+    }
+
+    const byCodeOrName = await this.dealershipModel
+      .findOne({
+        $or: [
+          { code: clean.toUpperCase() },
+          { name: new RegExp(`^${clean}$`, 'i') },
+        ],
+      })
+      .lean();
+
+    return byCodeOrName ? (byCodeOrName as unknown as IDealership) : null;
+  }
+
+  /**
+   * Validate incoming API key and resolve the target dealership.
+   * Multi-store resolution hierarchy:
+   * 1. Explicit store parameter (route :storeCode, query ?store=..., header x-store-code, or body storeCode)
+   * 2. Store-specific API Key matching in database or SYSTEM_STORES mapping
+   * 3. Intelligent auto-detection from filename or campaign name keywords
+   * 4. Backwards compatibility fallback to South Morang Hyundai (SMH-01)
+   */
+  async authenticateKey(
+    apiKey?: string,
+    explicitStore?: string,
+    fileName?: string,
+    campaignName?: string
+  ): Promise<IDealership> {
     const key = (apiKey || '').trim().replace(/^Bearer\s+/i, '');
     if (!key) {
       throw new UnauthorizedException(
@@ -48,58 +92,138 @@ export class WebhooksService {
       );
     }
 
-    // Find dealership by matching webhookApiKey in settings, or fallback to South Morang Hyundai if default key is used
+    // 1. If explicit store was specified
+    if (explicitStore && explicitStore.trim()) {
+      const targetStore = await this.resolveDealership(explicitStore);
+      if (targetStore) {
+        const expectedKey =
+          (targetStore as any).settings?.webhookApiKey || STORE_API_KEYS[targetStore.code];
+        const isMasterKey = key === DEFAULT_WEBHOOK_API_KEY;
+        const isKnownSystemKey = Object.values(STORE_API_KEYS).includes(key);
+
+        if (key === expectedKey || isMasterKey || isKnownSystemKey) {
+          return targetStore;
+        } else {
+          throw new UnauthorizedException(
+            `API Key provided is not authorized for store "${targetStore.name}" (${targetStore.code}).`
+          );
+        }
+      }
+    }
+
+    // 2. Resolve store by API Key directly (database lookup or static store mapping)
     let dealership = await this.dealershipModel
       .findOne({ 'settings.webhookApiKey': key })
       .lean();
 
-    if (!dealership && (key === DEFAULT_WEBHOOK_API_KEY || key.startsWith('ds_live_sk_'))) {
-      // Default to primary dealership (South Morang Hyundai)
+    if (!dealership) {
+      for (const [code, storeKey] of Object.entries(STORE_API_KEYS)) {
+        if (key === storeKey) {
+          dealership = await this.dealershipModel.findOne({ code }).lean();
+          break;
+        }
+      }
+    }
+
+    if (dealership) {
+      return dealership as unknown as IDealership;
+    }
+
+    // 3. If master key or valid prefix was provided, try auto-detecting store from filename / campaign name
+    const isMasterOrValidPrefix = key === DEFAULT_WEBHOOK_API_KEY || key.startsWith('ds_live_sk_');
+    if (isMasterOrValidPrefix) {
+      const text = `${fileName || ''} ${campaignName || ''}`.toLowerCase();
+      let detectedCode: string | null = null;
+
+      if (text.includes('berwick') || text.includes('bmg')) {
+        detectedCode = 'BMG-01';
+      } else if (text.includes('cranbourne') || text.includes('cbh')) {
+        detectedCode = 'CBH-01';
+      } else if (text.includes('dandenong') || text.includes('dnm')) {
+        detectedCode = 'DNM-01';
+      } else if (text.includes('southland') || text.includes('ski')) {
+        detectedCode = 'SKI-01';
+      } else if (
+        (text.includes('morang') && text.includes('kia')) ||
+        text.includes('smk')
+      ) {
+        detectedCode = 'SMK-01';
+      } else if (
+        (text.includes('morang') && (text.includes('hyundai') || text.includes('hy'))) ||
+        text.includes('smh')
+      ) {
+        detectedCode = 'SMH-01';
+      }
+
+      if (detectedCode) {
+        dealership = await this.dealershipModel.findOne({ code: detectedCode }).lean();
+        if (dealership) {
+          return dealership as unknown as IDealership;
+        }
+      }
+
+      // 4. Default fallback to South Morang Hyundai for existing integrations
       dealership = await this.dealershipModel.findOne({ code: 'SMH-01' }).lean();
       if (!dealership) {
         dealership = await this.dealershipModel.findOne({ status: 'ACTIVE' }).lean();
       }
+      if (dealership) {
+        return dealership as unknown as IDealership;
+      }
     }
 
-    if (!dealership) {
-      throw new UnauthorizedException('Invalid Webhook API Key.');
-    }
-
-    return dealership as unknown as IDealership;
+    throw new UnauthorizedException('Invalid Webhook API Key.');
   }
 
   /**
-   * Returns current webhook configuration and endpoint URL for the dealership
+   * Returns current webhook configuration, store-specific endpoint URLs, and example snippets
    */
-  async getConfig(dealershipId?: string) {
-    let dealership: any;
-    if (dealershipId) {
-      dealership = await this.dealershipModel.findById(dealershipId).lean();
-    } else {
-      dealership = await this.dealershipModel.findOne({ code: 'SMH-01' }).lean();
+  async getConfig(dealershipIdOrCode?: string) {
+    let dealership = await this.resolveDealership(dealershipIdOrCode);
+
+    if (!dealership) {
+      dealership = (await this.dealershipModel.findOne({ code: 'SMH-01' }).lean()) as any;
+      if (!dealership) {
+        dealership = (await this.dealershipModel.findOne({ status: 'ACTIVE' }).lean()) as any;
+      }
     }
 
+    const code = dealership?.code || 'SMH-01';
+    const name = dealership?.name || 'South Morang Hyundai';
     const currentKey =
-      dealership?.settings?.webhookApiKey || DEFAULT_WEBHOOK_API_KEY;
+      (dealership as any)?.settings?.webhookApiKey || STORE_API_KEYS[code] || DEFAULT_WEBHOOK_API_KEY;
+
+    const allStores = await this.dealershipModel.find({ status: 'ACTIVE' }).sort({ name: 1 }).lean();
 
     return {
       dealershipId: dealership?._id,
-      dealershipName: dealership?.name || 'South Morang Hyundai',
-      dealershipCode: dealership?.code || 'SMH-01',
-      webhookUrl: '/api/webhooks/ingest',
-      fullWebhookUrl: `http://localhost:7000/api/webhooks/ingest`,
+      dealershipName: name,
+      dealershipCode: code,
+      webhookUrl: `/api/webhooks/ingest?store=${code}`,
+      storeSpecificRouteUrl: `/api/webhooks/${code}/ingest`,
+      fullWebhookUrl: `http://localhost:7000/api/webhooks/ingest?store=${code}`,
+      fullStoreSpecificRouteUrl: `http://localhost:7000/api/webhooks/${code}/ingest`,
       apiKey: currentKey,
       supportedFormats: ['PDF (.pdf)', 'CSV (.csv)', 'Excel (.xlsx, .xls)', 'JSON Payload'],
       status: 'ACTIVE',
-      usageExampleCurl: `curl -X POST http://localhost:7000/api/webhooks/ingest \\\n  -H "x-api-key: ${currentKey}" \\\n  -F "file=@HY_Closed_RO.pdf"`,
+      usageExampleCurl: `curl -X POST "http://localhost:7000/api/webhooks/ingest?store=${code}" \\\n  -H "x-api-key: ${currentKey}" \\\n  -F "file=@${code}_Closed_RO.pdf"`,
+      usageExampleCurlDirect: `curl -X POST "http://localhost:7000/api/webhooks/${code}/ingest" \\\n  -H "x-api-key: ${currentKey}" \\\n  -F "file=@${code}_Closed_RO.pdf"`,
+      allStores: allStores.map((s) => ({
+        id: s._id,
+        name: s.name,
+        code: s.code,
+        apiKey: (s.settings as any)?.webhookApiKey || STORE_API_KEYS[s.code] || DEFAULT_WEBHOOK_API_KEY,
+        webhookUrl: `/api/webhooks/ingest?store=${s.code}`,
+        storeSpecificRouteUrl: `/api/webhooks/${s.code}/ingest`,
+      })),
     };
   }
 
   /**
-   * Health ping for webhook endpoint
+   * Health ping for webhook endpoint with store validation
    */
-  async testPing(apiKey?: string, sourceIp?: string) {
-    const dealership = await this.authenticateKey(apiKey);
+  async testPing(apiKey?: string, sourceIp?: string, explicitStore?: string) {
+    const dealership = await this.authenticateKey(apiKey, explicitStore);
 
     await this.webhookLogModel.create({
       dealershipId: dealership._id,
@@ -107,13 +231,17 @@ export class WebhooksService {
       sourceIp,
       status: 'PING',
       responseStatus: 200,
-      message: 'Webhook ping check successful',
-      payloadSummary: { timestamp: new Date() },
+      message: `Webhook ping check successful for ${dealership.name} (${dealership.code})`,
+      payloadSummary: {
+        dealership: dealership.name,
+        code: dealership.code,
+        timestamp: new Date(),
+      },
     });
 
     return {
       success: true,
-      message: 'DealerSocket Inbound Webhook is online, authenticated, and ready to receive PDF reports.',
+      message: `DealerSocket Inbound Webhook is online, authenticated, and ready to receive PDF reports for ${dealership.name} (${dealership.code}).`,
       dealership: {
         id: dealership._id,
         name: dealership.name,
@@ -124,18 +252,26 @@ export class WebhooksService {
   }
 
   /**
-   * Fetch recent webhook delivery logs
+   * Fetch recent webhook delivery logs filtered by dealership
    */
-  async getLogs(dealershipId?: string, limit = 20) {
+  async getLogs(dealershipIdOrCode?: string, limit = 20) {
     const filter: any = { isWebhook: true };
-    if (dealershipId) {
-      filter.dealershipId = new Types.ObjectId(dealershipId);
+    const target = (dealershipIdOrCode || '').trim();
+
+    if (target && target !== 'all') {
+      const resolved = await this.resolveDealership(target);
+      if (resolved) {
+        filter.dealershipId = resolved._id;
+      } else if (Types.ObjectId.isValid(target)) {
+        filter.dealershipId = new Types.ObjectId(target);
+      }
     }
 
     return this.webhookLogModel
       .find(filter)
       .sort({ createdAt: -1 })
       .limit(limit)
+      .populate('dealershipId', 'name code')
       .populate('reportId', 'name recordCount totalRevenue')
       .lean();
   }
@@ -221,14 +357,15 @@ export class WebhooksService {
         dateRangeLabel = `${fStr} - ${tStr}`;
       }
 
-      // Format report title reflecting today's ingestion date
+      // Format report title reflecting today's ingestion date and store identity
       const todayFormatted = new Date().toLocaleDateString('en-US', {
         month: 'short',
         day: 'numeric',
         year: 'numeric',
       });
+      const fallbackTitle = `${dealership.name} Closed RO`;
       const baseTitle =
-        detectedMetadata.campaignName || campaignName || fileName.replace(/\.[^/.]+$/, '');
+        detectedMetadata.campaignName || campaignName || fallbackTitle;
       const reportName = dateRangeLabel
         ? `${baseTitle} (${dateRangeLabel}) [Webhook]`
         : `${baseTitle} (${todayFormatted}) [Webhook]`;
@@ -257,7 +394,7 @@ export class WebhooksService {
         sourceFileName: fileName,
         sourceFileType: ext,
         sourceFileSize: fileBuffer.length,
-        campaignName: detectedMetadata.campaignName || campaignName || 'HY Closed RO',
+        campaignName: detectedMetadata.campaignName || campaignName || fallbackTitle,
         reportType: 'DealerSocket Closed RO',
         reportDateFrom: dateFrom ? new Date(dateFrom) : new Date(),
         reportDateTo: dateTo ? new Date(dateTo) : new Date(),
@@ -360,8 +497,10 @@ export class WebhooksService {
         totalRevenue: finalTotalRevenue,
         status: 'SUCCESS',
         responseStatus: 201,
-        message: `Successfully ingested report with ${rawRows.length} records and $${finalTotalRevenue.toLocaleString()} tracked revenue.`,
+        message: `Successfully ingested report for ${dealership.name} (${dealership.code}) with ${rawRows.length} records and $${finalTotalRevenue.toLocaleString()} tracked revenue.`,
         payloadSummary: {
+          dealership: dealership.name,
+          storeCode: dealership.code,
           reportName,
           dateRange: dateRangeLabel,
           rows: rawRows.length,
@@ -377,6 +516,8 @@ export class WebhooksService {
         action: 'REPORT_UPLOADED',
         after: {
           name: reportName,
+          dealership: dealership.name,
+          storeCode: dealership.code,
           recordCount: rawRows.length,
           source: 'WEBHOOK_INBOUND_PIPELINE',
           fileName,
@@ -385,10 +526,13 @@ export class WebhooksService {
 
       return {
         success: true,
-        message: 'DealerSocket report received and successfully ingested into system.',
+        message: `DealerSocket report received and successfully ingested for ${dealership.name} (${dealership.code}).`,
         data: {
           reportId: reportDoc._id,
           reportName,
+          dealershipId: dealership._id,
+          dealershipName: dealership.name,
+          dealershipCode: dealership.code,
           sourceFileName: fileName,
           fileType: ext.toUpperCase(),
           recordCount: rawRows.length,
