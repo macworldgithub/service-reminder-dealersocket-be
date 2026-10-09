@@ -1,4 +1,9 @@
-const pdf = require('pdf-parse');
+// Lazy-loaded to keep serverless cold starts fast (pdf-parse bundles pdf.js)
+let _pdf: any = null;
+const getPdfParse = (): any => {
+  if (!_pdf) _pdf = require('pdf-parse');
+  return _pdf;
+};
 export function parseUtcDateString(str?: string, endOfDay = false): Date | null {
   if (!str) return null;
   const trimmed = str.trim();
@@ -56,6 +61,7 @@ export class PdfParser {
       });
     };
 
+    const pdf = getPdfParse();
     let rawText = '';
     try {
       const pdfData = await pdf(buffer, { pagerender });

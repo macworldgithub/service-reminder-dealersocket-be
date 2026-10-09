@@ -21,7 +21,12 @@ import { AppController } from './app.controller';
       isGlobal: true,
     }),
     MongooseModule.forRoot(ENV.MONGODB_URI, {
-      autoIndex: true,
+      // Skip index sync on every serverless cold start in production
+      autoIndex: process.env.NODE_ENV !== 'production',
+      maxPoolSize: 10,
+      minPoolSize: 1,
+      serverSelectionTimeoutMS: 8000,
+      socketTimeoutMS: 45000,
     }),
     AuthModule,
     UsersModule,

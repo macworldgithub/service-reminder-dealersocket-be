@@ -1,4 +1,11 @@
-import * as XLSX from 'xlsx';
+import type * as XLSXType from 'xlsx';
+
+// Lazy-loaded to keep serverless cold starts fast (xlsx is large)
+let _xlsx: typeof XLSXType | null = null;
+const getXlsx = (): typeof XLSXType => {
+  if (!_xlsx) _xlsx = require('xlsx');
+  return _xlsx as typeof XLSXType;
+};
 
 export interface XlsxParseResult {
   sheets: string[];
@@ -10,6 +17,7 @@ export interface XlsxParseResult {
 
 export class XlsxParser {
   static parse(buffer: Buffer, targetSheetName?: string): XlsxParseResult {
+    const XLSX = getXlsx();
     const workbook = XLSX.read(buffer, { type: 'buffer', cellDates: true });
     const sheetNames = workbook.SheetNames;
 

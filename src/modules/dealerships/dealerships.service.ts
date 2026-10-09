@@ -22,54 +22,71 @@ export class DealershipsService implements OnModuleInit {
     @InjectModel('User') private userModel: Model<IUser>
   ) {}
 
-  async onModuleInit() {
-    try {
-      const storeIds: any[] = [];
-      for (const store of SYSTEM_STORES) {
-        let existing = await this.dealershipModel.findOne({
-          $or: [{ code: store.code }, { name: store.name }],
-        });
+  onModuleInit() {
+    // Fire-and-forget so it never delays serverless cold starts / first request
+    this.ensureSystemStores().catch((err: any) =>
+      this.logger.warn(`Could not verify system stores on init: ${err.message}`)
+    );
+  }
 
-        if (!existing) {
-          existing = await this.dealershipModel.create({
-            name: store.name,
-            code: store.code,
-            timezone: 'Australia/Melbourne',
-            status: 'ACTIVE',
-            settings: {
-              autoDetectHeaders: true,
-              defaultReportType: 'DealerSocket Closed RO',
-              duplicateDetectionKeys: ['externalEntityId', 'eventNumber'],
-              allowedFileTypes: ['csv', 'xlsx', 'xls', 'pdf'],
-              webhookApiKey: store.apiKey,
-            },
-          });
-          this.logger.log(`Initialized system store: ${store.name} (${store.code})`);
-        } else {
-          // Ensure store has its unique webhook API key configured
-          const currentSettings = existing.settings || {};
-          if (!currentSettings.webhookApiKey || currentSettings.webhookApiKey !== store.apiKey) {
-            existing.settings = {
-              ...currentSettings,
-              webhookApiKey: store.apiKey,
-            };
-            await this.dealershipModel.findByIdAndUpdate(existing._id, {
-              settings: existing.settings,
-            });
-          }
-        }
-        storeIds.push(existing._id);
+  private async ensureSystemStores() {
+    // Single batched read instead of one query per store
+    const existingAll = await this.dealershipModel
+      .find({
+        $or: [
+          { code: { $in: SYSTEM_STORES.map((s) => s.code) } },
+          { name: { $in: SYSTEM_STORES.map((s) => s.name) } },
+        ],
+      })
+      .select('_id name code settings')
+      .lean();
+
+    const storeIds: any[] = [];
+    const writes: Promise<any>[] = [];
+
+    for (const store of SYSTEM_STORES) {
+      const existing: any = existingAll.find((d: any) => d.code === store.code || d.name === store.name);
+
+      if (!existing) {
+        const created = await this.dealershipModel.create({
+          name: store.name,
+          code: store.code,
+          timezone: 'Australia/Melbourne',
+          status: 'ACTIVE',
+          settings: {
+            autoDetectHeaders: true,
+            defaultReportType: 'DealerSocket Closed RO',
+            duplicateDetectionKeys: ['externalEntityId', 'eventNumber'],
+            allowedFileTypes: ['csv', 'xlsx', 'xls', 'pdf'],
+            webhookApiKey: store.apiKey,
+          },
+        });
+        this.logger.log(`Initialized system store: ${store.name} (${store.code})`);
+        storeIds.push(created._id);
+        continue;
       }
 
-      // Automatically ensure admin users have access to all 6 stores
-      if (storeIds.length > 0) {
-        await this.userModel.updateMany(
-          { role: 'ADMIN' },
-          { $addToSet: { dealershipIds: { $each: storeIds } } }
+      // Ensure store has its unique webhook API key configured
+      const currentSettings = existing.settings || {};
+      if (currentSettings.webhookApiKey !== store.apiKey) {
+        writes.push(
+          this.dealershipModel.updateOne(
+            { _id: existing._id },
+            { $set: { 'settings.webhookApiKey': store.apiKey } }
+          )
         );
       }
-    } catch (err: any) {
-      this.logger.warn(`Could not verify system stores on init: ${err.message}`);
+      storeIds.push(existing._id);
+    }
+
+    await Promise.all(writes);
+
+    // Ensure admin users have access to all stores (only touches users missing one)
+    if (storeIds.length > 0) {
+      await this.userModel.updateMany(
+        { role: 'ADMIN', dealershipIds: { $not: { $all: storeIds } } },
+        { $addToSet: { dealershipIds: { $each: storeIds } } }
+      );
     }
   }
 

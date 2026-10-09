@@ -1,5 +1,12 @@
-import * as _PDFDocument from 'pdfkit';
-const PDFDocument: any = (_PDFDocument as any).default || _PDFDocument;
+// Lazy-loaded to keep serverless cold starts fast (pdfkit is large)
+let _PDFDocument: any = null;
+const getPDFDocument = (): any => {
+  if (!_PDFDocument) {
+    const mod = require('pdfkit');
+    _PDFDocument = mod.default || mod;
+  }
+  return _PDFDocument;
+};
 import { IReportRecord } from '../models/ReportRecord.model';
 import { IReport } from '../models/Report.model';
 import { IPdfTemplateSettings } from '../models/Template.model';
@@ -102,6 +109,7 @@ export class PdfGenerator {
     templateSettings?: IPdfTemplateSettings
   ): Promise<Buffer> {
     return new Promise((resolve, reject) => {
+      const PDFDocument = getPDFDocument();
       const doc = new PDFDocument({
         margin: 36,
         size: 'A4',

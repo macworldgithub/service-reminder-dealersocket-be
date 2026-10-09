@@ -1,7 +1,7 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
-import * as XLSX from 'xlsx';
+import type * as XLSXType from 'xlsx';
 import { IReport } from '../../models/Report.model';
 import { IReportRecord } from '../../models/ReportRecord.model';
 import { ITemplate } from '../../models/Template.model';
@@ -122,7 +122,8 @@ export class ReportsService {
     const limit = Math.min(100, Math.max(1, Number(query.limit) || 20));
     const skip = (page - 1) * limit;
 
-    const [items, total] = await Promise.all([
+    // Run list, count and id lookup in parallel (single DB round-trip window)
+    const [items, total, allFilteredReportIds] = await Promise.all([
       this.reportModel
         .find(filter)
         .sort({ createdAt: -1 })
@@ -132,19 +133,37 @@ export class ReportsService {
         .populate('dealershipId', 'name code')
         .lean(),
       this.reportModel.countDocuments(filter),
+      this.reportModel.find(filter).select('_id').lean(),
     ]);
 
-    // Attach totalRevenue and avgRoAmount to each report item
+    // Attach totalRevenue and avgRoAmount to each report item, and compute
+    // total tracked revenue across all filtered reports — both in parallel
     const reportIds = items.map((r) => r._id);
-    const revenueAggr = await this.reportRecordModel.aggregate([
-      { $match: { reportId: { $in: reportIds } } },
-      {
-        $group: {
-          _id: '$reportId',
-          totalRevenue: { $sum: '$roAmount' },
-          avgRoAmount: { $avg: '$roAmount' },
-        },
-      },
+    const allIds = allFilteredReportIds.map((r) => r._id);
+    const [revenueAggr, overallRevenueAggr] = await Promise.all([
+      reportIds.length
+        ? this.reportRecordModel.aggregate([
+            { $match: { reportId: { $in: reportIds } } },
+            {
+              $group: {
+                _id: '$reportId',
+                totalRevenue: { $sum: '$roAmount' },
+                avgRoAmount: { $avg: '$roAmount' },
+              },
+            },
+          ])
+        : Promise.resolve([] as any[]),
+      allIds.length
+        ? this.reportRecordModel.aggregate([
+            { $match: { reportId: { $in: allIds } } },
+            {
+              $group: {
+                _id: null,
+                totalRevenue: { $sum: '$roAmount' },
+              },
+            },
+          ])
+        : Promise.resolve([] as any[]),
     ]);
 
     const revMap = new Map<string, { totalRevenue: number; avgRoAmount: number }>();
@@ -161,18 +180,6 @@ export class ReportsService {
       avgRoAmount: revMap.get(String(item._id))?.avgRoAmount || 0,
     }));
 
-    // Calculate total tracked revenue across all filtered reports
-    const allFilteredReportIds = await this.reportModel.find(filter).select('_id').lean();
-    const allIds = allFilteredReportIds.map((r) => r._id);
-    const overallRevenueAggr = await this.reportRecordModel.aggregate([
-      { $match: { reportId: { $in: allIds } } },
-      {
-        $group: {
-          _id: null,
-          totalRevenue: { $sum: '$roAmount' },
-        },
-      },
-    ]);
     const totalTrackedRevenue = Math.round((overallRevenueAggr[0]?.totalRevenue || 0) * 100) / 100;
 
     return {
@@ -613,6 +620,7 @@ export class ReportsService {
       'Record Status': r.recordStatus,
     }));
 
+    const XLSX: typeof XLSXType = require('xlsx');
     const worksheet = XLSX.utils.json_to_sheet(rows);
     const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(workbook, worksheet, 'Records');
