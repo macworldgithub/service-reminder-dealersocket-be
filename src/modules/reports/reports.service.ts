@@ -390,6 +390,48 @@ export class ReportsService {
     return { message: 'Report and associated records deleted successfully' };
   }
 
+  async deleteAll(userId: string, dealershipId?: string): Promise<{ message: string; deletedCount: number; deletedRecordsCount: number }> {
+    const filter: any = {};
+    if (dealershipId && dealershipId !== 'all') {
+      filter.dealershipId = new Types.ObjectId(dealershipId);
+    }
+
+    const reports = await this.reportModel.find(filter).select('_id name recordCount').lean();
+    if (!reports.length) {
+      return {
+        message: 'No reports found to delete',
+        deletedCount: 0,
+        deletedRecordsCount: 0,
+      };
+    }
+
+    const reportIds = reports.map((r) => r._id);
+
+    const [deleteRecordsResult, deleteReportsResult] = await Promise.all([
+      this.reportRecordModel.deleteMany({ reportId: { $in: reportIds } }),
+      this.reportModel.deleteMany({ _id: { $in: reportIds } }),
+    ]);
+
+    await this.auditService.log({
+      dealershipId: dealershipId && dealershipId !== 'all' ? new Types.ObjectId(dealershipId) : (reports[0]?.dealershipId || new Types.ObjectId()),
+      userId,
+      entityType: 'Report',
+      entityId: new Types.ObjectId(),
+      action: 'REPORT_DELETED',
+      before: {
+        totalReportsDeleted: deleteReportsResult.deletedCount,
+        totalRecordsDeleted: deleteRecordsResult.deletedCount,
+        scope: dealershipId ? `Dealership: ${dealershipId}` : 'ALL',
+      },
+    });
+
+    return {
+      message: `Successfully deleted ${deleteReportsResult.deletedCount} reports and ${deleteRecordsResult.deletedCount} associated records`,
+      deletedCount: deleteReportsResult.deletedCount,
+      deletedRecordsCount: deleteRecordsResult.deletedCount,
+    };
+  }
+
   async duplicate(id: string, userId: string) {
     const sourceReport = await this.reportModel.findById(id).lean();
     if (!sourceReport) throw new NotFoundException('Report not found');

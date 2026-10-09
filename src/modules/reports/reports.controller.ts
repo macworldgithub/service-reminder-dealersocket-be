@@ -87,6 +87,19 @@ export class ReportsController {
     };
   }
 
+  @Delete('all')
+  @Roles('ADMIN')
+  async deleteAll(
+    @Query('dealershipId') dealershipId: string,
+    @CurrentUser('userId') userId: string
+  ) {
+    const result = await this.reportsService.deleteAll(userId, dealershipId);
+    return {
+      success: true,
+      ...result,
+    };
+  }
+
   @Delete(':id')
   @Roles('ADMIN')
   async delete(@Param('id') id: string, @CurrentUser('userId') userId: string) {
