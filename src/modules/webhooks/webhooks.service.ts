@@ -317,6 +317,15 @@ export class WebhooksService {
         throw new BadRequestException('No records detected in received document.');
       }
 
+      // If document explicitly contains a dealership header, resolve to that store
+      let targetDealership = dealership;
+      if (detectedMetadata.dealershipName) {
+        const detectedStore = await this.resolveDealership(detectedMetadata.dealershipName);
+        if (detectedStore) {
+          targetDealership = detectedStore;
+        }
+      }
+
       // Assign system user as uploader
       let systemUser = await this.userModel.findOne({ email: 'admin@dealersocket.com' }).lean();
       if (!systemUser) {
@@ -363,7 +372,7 @@ export class WebhooksService {
         day: 'numeric',
         year: 'numeric',
       });
-      const fallbackTitle = `${dealership.name} Closed RO`;
+      const fallbackTitle = `${targetDealership.name} Closed RO`;
       const baseTitle =
         detectedMetadata.campaignName || campaignName || fallbackTitle;
       const reportName = dateRangeLabel
@@ -372,7 +381,7 @@ export class WebhooksService {
 
       // 1. Create Import Document
       const importDoc = await this.importModel.create({
-        dealershipId: dealership._id,
+        dealershipId: targetDealership._id,
         uploadedBy: uploaderId,
         fileName,
         fileType: ext,
@@ -388,7 +397,7 @@ export class WebhooksService {
 
       // 3. Create Report Document
       const reportDoc = await this.reportModel.create({
-        dealershipId: dealership._id,
+        dealershipId: targetDealership._id,
         uploadedBy: uploaderId,
         name: reportName,
         sourceFileName: fileName,
@@ -413,7 +422,7 @@ export class WebhooksService {
       const recordsToInsert = rawRows.map((rawRow) => {
         const record: any = {
           reportId: reportDoc._id,
-          dealershipId: dealership._id,
+          dealershipId: targetDealership._id,
           vehicle: {},
           customFields: {},
           sourceData: rawRow,
@@ -486,7 +495,7 @@ export class WebhooksService {
 
       // 5. Log Webhook Delivery
       await this.webhookLogModel.create({
-        dealershipId: dealership._id,
+        dealershipId: targetDealership._id,
         eventType: 'REPORT_INGEST',
         sourceIp,
         fileName,
@@ -497,10 +506,10 @@ export class WebhooksService {
         totalRevenue: finalTotalRevenue,
         status: 'SUCCESS',
         responseStatus: 201,
-        message: `Successfully ingested report for ${dealership.name} (${dealership.code}) with ${rawRows.length} records and $${finalTotalRevenue.toLocaleString()} tracked revenue.`,
+        message: `Successfully ingested report for ${targetDealership.name} (${targetDealership.code}) with ${rawRows.length} records and $${finalTotalRevenue.toLocaleString()} tracked revenue.`,
         payloadSummary: {
-          dealership: dealership.name,
-          storeCode: dealership.code,
+          dealership: targetDealership.name,
+          storeCode: targetDealership.code,
           reportName,
           dateRange: dateRangeLabel,
           rows: rawRows.length,
@@ -509,15 +518,15 @@ export class WebhooksService {
 
       // 6. Audit Trail
       await this.auditService.log({
-        dealershipId: dealership._id,
+        dealershipId: targetDealership._id,
         userId: uploaderId,
         entityType: 'Report',
         entityId: reportDoc._id,
         action: 'REPORT_UPLOADED',
         after: {
           name: reportName,
-          dealership: dealership.name,
-          storeCode: dealership.code,
+          dealership: targetDealership.name,
+          storeCode: targetDealership.code,
           recordCount: rawRows.length,
           source: 'WEBHOOK_INBOUND_PIPELINE',
           fileName,
@@ -526,13 +535,13 @@ export class WebhooksService {
 
       return {
         success: true,
-        message: `DealerSocket report received and successfully ingested for ${dealership.name} (${dealership.code}).`,
+        message: `DealerSocket report received and successfully ingested for ${targetDealership.name} (${targetDealership.code}).`,
         data: {
           reportId: reportDoc._id,
           reportName,
-          dealershipId: dealership._id,
-          dealershipName: dealership.name,
-          dealershipCode: dealership.code,
+          dealershipId: targetDealership._id,
+          dealershipName: targetDealership.name,
+          dealershipCode: targetDealership.code,
           sourceFileName: fileName,
           fileType: ext.toUpperCase(),
           recordCount: rawRows.length,

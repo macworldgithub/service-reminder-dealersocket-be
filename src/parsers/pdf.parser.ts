@@ -68,7 +68,6 @@ export class PdfParser {
 
     const metadata: PdfMetadata = {
       reportTitle: 'Campaign Summary Service Detail',
-      dealershipName: 'South Morang Hyundai',
     };
     const warnings: string[] = [];
 
@@ -122,8 +121,18 @@ export class PdfParser {
           const m = lineText.match(/Record\s*Count:\s*(\d+)/i);
           if (m) metadata.recordCountExpected = parseInt(m[1], 10);
         }
-        if (/South\s*Morang\s*Hyundai/i.test(lineText)) {
+        if (/Berwick\s*MG/i.test(lineText) || /\bBMG\b/i.test(lineText)) {
+          metadata.dealershipName = 'Berwick MG';
+        } else if (/Cranbourne\s*Hyundai/i.test(lineText) || /\bCBH\b/i.test(lineText)) {
+          metadata.dealershipName = 'Cranbourne Hyundai';
+        } else if (/Dandenong\s*Mitsubishi/i.test(lineText) || /\bDNM\b/i.test(lineText)) {
+          metadata.dealershipName = 'Dandenong Mitsubishi';
+        } else if (/South\s*Morang\s*Kia/i.test(lineText) || /\bSMK\b/i.test(lineText)) {
+          metadata.dealershipName = 'South Morang Kia';
+        } else if (/South\s*Morang\s*Hyundai/i.test(lineText) || /\bSMH\b/i.test(lineText) || /\bSMHY\b/i.test(lineText)) {
           metadata.dealershipName = 'South Morang Hyundai';
+        } else if (/Southland/i.test(lineText) || /\bSKI\b/i.test(lineText)) {
+          metadata.dealershipName = 'Southland Kia & Isuzu Ute';
         }
 
         if (
