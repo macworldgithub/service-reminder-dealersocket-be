@@ -17,9 +17,14 @@ import { AllExceptionsFilter } from './common/filters/http-exception.filter';
 let cachedApp: INestApplication | null = null;
 const expressServer: Express = express();
 
+// Configure body parser limit (50MB) before Nest initializes
+expressServer.use(express.json({ limit: '50mb' }));
+expressServer.use(express.urlencoded({ limit: '50mb', extended: true }));
+
 export async function bootstrapServer(): Promise<Express> {
   if (!cachedApp) {
     const app = await NestFactory.create(AppModule, new ExpressAdapter(expressServer), {
+      bodyParser: false,
       logger: process.env.NODE_ENV === 'production' ? ['error', 'warn'] : ['error', 'warn', 'log'],
     });
 

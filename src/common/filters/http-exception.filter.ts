@@ -28,6 +28,10 @@ export class AllExceptionsFilter implements ExceptionFilter {
       }
     } else if (exception instanceof Error) {
       message = exception.message;
+      // Preserve explicit status or statusCode (e.g. 413 Payload Too Large)
+      if ((exception as any).status || (exception as any).statusCode) {
+        status = (exception as any).status || (exception as any).statusCode;
+      }
       // Handle MongoDB Duplicate Key Error (code 11000)
       if ((exception as any).code === 11000) {
         status = HttpStatus.CONFLICT;
