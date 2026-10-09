@@ -91,9 +91,11 @@ export class ReportsController {
   @Roles('ADMIN')
   async deleteAll(
     @Query('dealershipId') dealershipId: string,
+    @Query('dateFrom') dateFrom: string,
+    @Query('dateTo') dateTo: string,
     @CurrentUser('userId') userId: string
   ) {
-    const result = await this.reportsService.deleteAll(userId, dealershipId);
+    const result = await this.reportsService.deleteAll(userId, dealershipId, { dateFrom, dateTo });
     return {
       success: true,
       ...result,

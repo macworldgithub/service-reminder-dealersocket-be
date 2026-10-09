@@ -390,10 +390,61 @@ export class ReportsService {
     return { message: 'Report and associated records deleted successfully' };
   }
 
-  async deleteAll(userId: string, dealershipId?: string): Promise<{ message: string; deletedCount: number; deletedRecordsCount: number }> {
+  async deleteAll(
+    userId: string,
+    dealershipId?: string,
+    dateRange?: { dateFrom?: string; dateTo?: string }
+  ): Promise<{ message: string; deletedCount: number; deletedRecordsCount: number }> {
     const filter: any = {};
     if (dealershipId && dealershipId !== 'all') {
       filter.dealershipId = new Types.ObjectId(dealershipId);
+    }
+
+    if (dateRange?.dateFrom || dateRange?.dateTo) {
+      const fromDate = dateRange.dateFrom ? parseUtcStartOfDay(dateRange.dateFrom) : undefined;
+      const toDate = dateRange.dateTo ? parseUtcEndOfDay(dateRange.dateTo) : undefined;
+      const isSingleDay = Boolean(dateRange.dateFrom && dateRange.dateTo && dateRange.dateFrom === dateRange.dateTo);
+
+      if (fromDate && toDate) {
+        if (isSingleDay) {
+          filter.$or = [
+            {
+              reportDateFrom: { $lte: toDate },
+              reportDateTo: { $gte: fromDate },
+            },
+            {
+              createdAt: { $gte: fromDate, $lte: toDate },
+            },
+          ];
+        } else {
+          filter.$or = [
+            {
+              reportDateFrom: { $lte: toDate },
+              reportDateTo: { $gte: fromDate },
+            },
+            {
+              reportDateFrom: { $exists: false },
+              createdAt: { $gte: fromDate, $lte: toDate },
+            },
+            {
+              reportDateFrom: null,
+              createdAt: { $gte: fromDate, $lte: toDate },
+            },
+          ];
+        }
+      } else if (fromDate) {
+        filter.$or = [
+          { reportDateTo: { $gte: fromDate } },
+          { reportDateTo: { $exists: false }, createdAt: { $gte: fromDate } },
+          { reportDateFrom: null, createdAt: { $gte: fromDate } },
+        ];
+      } else if (toDate) {
+        filter.$or = [
+          { reportDateFrom: { $lte: toDate } },
+          { reportDateFrom: { $exists: false }, createdAt: { $lte: toDate } },
+          { reportDateFrom: null, createdAt: { $lte: toDate } },
+        ];
+      }
     }
 
     const reports = await this.reportModel.find(filter).select('_id name recordCount').lean();
@@ -422,6 +473,7 @@ export class ReportsService {
         totalReportsDeleted: deleteReportsResult.deletedCount,
         totalRecordsDeleted: deleteRecordsResult.deletedCount,
         scope: dealershipId ? `Dealership: ${dealershipId}` : 'ALL',
+        dateRange: dateRange || 'ALL_TIME',
       },
     });
 
