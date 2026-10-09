@@ -16,26 +16,50 @@ async function seed() {
   console.log('[Seed] Connected.');
 
   // Clean existing collections (optional/safe upsert)
-  console.log('[Seed] Seeding Dealerships...');
-  let hyundai = await Dealership.findOne({ code: 'SMH-01' });
-  if (!hyundai) {
-    hyundai = await Dealership.create({
-      name: 'South Morang Hyundai',
-      code: 'SMH-01',
-      timezone: 'Australia/Melbourne',
-      status: 'ACTIVE',
-      settings: {
-        autoDetectHeaders: true,
-        defaultReportType: 'DealerSocket Closed RO',
-        duplicateDetectionKeys: ['externalEntityId', 'eventNumber'],
-      },
-    });
+  const STORES = [
+    { name: 'Berwick MG', code: 'BMG-01' },
+    { name: 'Cranbourne Hyundai', code: 'CBH-01' },
+    { name: 'Dandenong Mitsubishi', code: 'DNM-01' },
+    { name: 'South Morang Hyundai', code: 'SMH-01' },
+    { name: 'South Morang Kia', code: 'SMK-01' },
+    { name: 'Southland Kia & Isuzu Ute', code: 'SKI-01' },
+  ];
+
+  console.log('[Seed] Seeding 6 Dealership Stores...');
+  const dealershipDocs: any[] = [];
+  const validCodes = STORES.map((s) => s.code);
+
+  for (const s of STORES) {
+    let d = await Dealership.findOne({ $or: [{ code: s.code }, { name: s.name }] });
+    if (!d) {
+      d = await Dealership.create({
+        name: s.name,
+        code: s.code,
+        timezone: 'Australia/Melbourne',
+        status: 'ACTIVE',
+        settings: {
+          autoDetectHeaders: true,
+          defaultReportType: 'DealerSocket Closed RO',
+          duplicateDetectionKeys: ['externalEntityId', 'eventNumber'],
+          allowedFileTypes: ['csv', 'xlsx', 'xls', 'pdf'],
+        },
+      });
+    } else {
+      d.name = s.name;
+      d.code = s.code;
+      d.status = 'ACTIVE';
+      await d.save();
+    }
+    dealershipDocs.push(d);
   }
 
-  // Remove any non-Hyundai dealerships to keep only South Morang Hyundai
-  await Dealership.deleteMany({ code: { $ne: 'SMH-01' } });
+  const hyundai = dealershipDocs.find((d) => d.code === 'SMH-01') || dealershipDocs[0];
+  const allDealershipIds = dealershipDocs.map((d) => d._id);
 
-  console.log('[Seed] Seeding Users with single ADMIN role and South Morang Hyundai...');
+  // Clean up any dealerships not in our 6 stores
+  await Dealership.deleteMany({ code: { $nin: validCodes } });
+
+  console.log('[Seed] Seeding Users with single ADMIN role and all 6 stores...');
   const salt = await bcrypt.genSalt(10);
   const devsPasswordHash = await bcrypt.hash('Devs@123456', salt);
   const adminPasswordHash = await bcrypt.hash('Admin@123456', salt);
@@ -48,13 +72,13 @@ async function seed() {
       passwordHash: devsPasswordHash,
       role: 'ADMIN',
       status: 'ACTIVE',
-      dealershipIds: [hyundai._id],
+      dealershipIds: allDealershipIds,
     });
   } else {
     devUser.name = 'Devs';
     devUser.passwordHash = devsPasswordHash;
     devUser.role = 'ADMIN';
-    devUser.dealershipIds = [hyundai._id];
+    devUser.dealershipIds = allDealershipIds;
     await devUser.save();
   }
 
@@ -66,16 +90,16 @@ async function seed() {
       passwordHash: adminPasswordHash,
       role: 'ADMIN',
       status: 'ACTIVE',
-      dealershipIds: [hyundai._id],
+      dealershipIds: allDealershipIds,
     });
   } else {
     admin.role = 'ADMIN';
-    admin.dealershipIds = [hyundai._id];
+    admin.dealershipIds = allDealershipIds;
     await admin.save();
   }
 
-  // Ensure all existing users in the system have the single ADMIN role
-  await User.updateMany({}, { role: 'ADMIN' });
+  // Ensure all existing users in the system have access to all 6 stores
+  await User.updateMany({}, { role: 'ADMIN', dealershipIds: allDealershipIds });
 
   console.log('[Seed] Seeding Default Column Mappings for South Morang Hyundai...');
   const defaultMappings = [
@@ -91,81 +115,81 @@ async function seed() {
     { sourceColumn: 'RO Amount', targetField: 'roAmount', dataType: 'currency', transformation: 'parse_currency' },
   ];
 
-  for (const m of defaultMappings) {
-    await ColumnMapping.findOneAndUpdate(
-      { dealershipId: hyundai._id, sourceColumn: m.sourceColumn },
+  for (const d of dealershipDocs) {
+    for (const m of defaultMappings) {
+      await ColumnMapping.findOneAndUpdate(
+        { dealershipId: d._id, sourceColumn: m.sourceColumn },
+        {
+          ...m,
+          dealershipId: d._id,
+          createdBy: admin._id,
+        },
+        { upsert: true }
+      );
+    }
+
+    await Template.findOneAndUpdate(
+      { dealershipId: d._id, name: 'Executive Closed RO PDF Template' },
       {
-        ...m,
-        dealershipId: hyundai._id,
+        dealershipId: d._id,
+        name: 'Executive Closed RO PDF Template',
+        type: 'PDF',
+        pdfSettings: {
+          reportTitle: 'Campaign Summary',
+          subtitle: 'Service Detail',
+          headerDealershipName: d.name,
+          campaignLabel: `${d.code} Closed RO`,
+          dateRangeText: '9/28/2026 - 10/5/2026',
+          primaryColor: '#0f172a',
+          showSummaryMetrics: true,
+          columns: [
+            { field: 'externalEntityId', label: 'Entity ID', visible: true },
+            { field: 'customerName', label: 'Customer Name', visible: true },
+            { field: 'vehicle.year', label: 'Year', visible: true },
+            { field: 'vehicle.model', label: 'Make/Model', visible: true },
+            { field: 'campaignName', label: 'Campaign', visible: true },
+            { field: 'eventNumber', label: 'Event#', visible: true },
+            { field: 'closeDate', label: 'Close Date', visible: true },
+            { field: 'roAmount', label: 'RO Amount', visible: true },
+          ],
+          footerNotes: 'DealerSocket Operations Hub - Confidential Dealership Operations Report',
+        },
+        createdBy: admin._id,
+      },
+      { upsert: true }
+    );
+
+    await Template.findOneAndUpdate(
+      { dealershipId: d._id, name: 'Closed RO Follow-Up SMS' },
+      {
+        dealershipId: d._id,
+        name: 'Closed RO Follow-Up SMS',
+        type: 'SMS',
+        smsBody: `Hi {{customerName}}, thank you for servicing your {{vehicleYear}} {{vehicleModel}} with ${d.name}. Your RO amount was {{roAmount}}. We hope everything went smoothly!`,
+        createdBy: admin._id,
+      },
+      { upsert: true }
+    );
+
+    await Campaign.findOneAndUpdate(
+      { dealershipId: d._id, name: `${d.code} Closed RO 14-Day Nurture` },
+      {
+        dealershipId: d._id,
+        name: `${d.code} Closed RO 14-Day Nurture`,
+        description: `Automated follow-up sequence triggered upon DealerSocket Closed RO import for ${d.name}`,
+        triggerType: 'CLOSED_RO',
+        status: 'ACTIVE',
+        steps: [
+          { stepNumber: 1, channel: 'SMS', delayDays: 1, description: 'Day 1 Post-Service Satisfaction Check' },
+          { stepNumber: 2, channel: 'EMAIL', delayDays: 3, description: 'Day 3 Service Inspection Summary & Survey' },
+          { stepNumber: 3, channel: 'SMS', delayDays: 7, description: 'Day 7 Complimentary Car Wash Reminder' },
+          { stepNumber: 4, channel: 'VA_TASK', delayDays: 12, description: 'Day 12 Virtual Assistant Phone Follow-up' },
+        ],
         createdBy: admin._id,
       },
       { upsert: true }
     );
   }
-
-  console.log('[Seed] Seeding Default PDF & Campaign Templates...');
-  await Template.findOneAndUpdate(
-    { dealershipId: hyundai._id, name: 'Executive Closed RO PDF Template' },
-    {
-      dealershipId: hyundai._id,
-      name: 'Executive Closed RO PDF Template',
-      type: 'PDF',
-      pdfSettings: {
-        reportTitle: 'Campaign Summary',
-        subtitle: 'Service Detail',
-        headerDealershipName: 'South Morang Hyundai',
-        campaignLabel: 'HY Closed RO',
-        dateRangeText: '9/28/2026 - 10/5/2026',
-        primaryColor: '#0f172a',
-        showSummaryMetrics: true,
-        columns: [
-          { field: 'externalEntityId', label: 'Entity ID', visible: true },
-          { field: 'customerName', label: 'Customer Name', visible: true },
-          { field: 'vehicle.year', label: 'Year', visible: true },
-          { field: 'vehicle.model', label: 'Make/Model', visible: true },
-          { field: 'campaignName', label: 'Campaign', visible: true },
-          { field: 'eventNumber', label: 'Event#', visible: true },
-          { field: 'closeDate', label: 'Close Date', visible: true },
-          { field: 'roAmount', label: 'RO Amount', visible: true },
-        ],
-        footerNotes: 'DealerSocket Operations Hub - Confidential Dealership Operations Report',
-      },
-      createdBy: admin._id,
-    },
-    { upsert: true }
-  );
-
-  await Template.findOneAndUpdate(
-    { dealershipId: hyundai._id, name: 'Closed RO Follow-Up SMS' },
-    {
-      dealershipId: hyundai._id,
-      name: 'Closed RO Follow-Up SMS',
-      type: 'SMS',
-      smsBody: 'Hi {{customerName}}, thank you for servicing your {{vehicleYear}} {{vehicleModel}} with South Morang Hyundai. Your RO amount was {{roAmount}}. We hope everything went smoothly!',
-      createdBy: admin._id,
-    },
-    { upsert: true }
-  );
-
-  console.log('[Seed] Seeding Demo Campaign Workflow...');
-  await Campaign.findOneAndUpdate(
-    { dealershipId: hyundai._id, name: 'HY Closed RO 14-Day Nurture' },
-    {
-      dealershipId: hyundai._id,
-      name: 'HY Closed RO 14-Day Nurture',
-      description: 'Automated follow-up sequence triggered upon DealerSocket Closed RO import',
-      triggerType: 'CLOSED_RO',
-      status: 'ACTIVE',
-      steps: [
-        { stepNumber: 1, channel: 'SMS', delayDays: 1, description: 'Day 1 Post-Service Satisfaction Check' },
-        { stepNumber: 2, channel: 'EMAIL', delayDays: 3, description: 'Day 3 Service Inspection Summary & Survey' },
-        { stepNumber: 3, channel: 'SMS', delayDays: 7, description: 'Day 7 Complimentary Car Wash Reminder' },
-        { stepNumber: 4, channel: 'VA_TASK', delayDays: 12, description: 'Day 12 Virtual Assistant Phone Follow-up' },
-      ],
-      createdBy: admin._id,
-    },
-    { upsert: true }
-  );
 
   console.log('[Seed] Seeding Reference Report (South Morang Hyundai HY Closed RO - 119 records)...');
   let demoReport = await Report.findOne({
